@@ -6,12 +6,13 @@ import requests
 from urllib.parse import urljoin, quote
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
+from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-# 📚 القاموس الشامل
+# 📚 القاموس الشامل للفرق
 TEAM_DICT = {
     "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
     "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
@@ -75,7 +76,7 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# 🔥 التعديل الجديد: دالة استخراج البث تتجاهل الإعلانات
+# دالة استخراج البث تتخطى الإعلانات وتلتقط الرابط الحقيقي
 async def extract_stream(page, target_url):
     stream_urls = []
     def handle_response(response):
@@ -88,13 +89,11 @@ async def extract_stream(page, target_url):
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
         
-        # محاولة الضغط على زر التشغيل إذا وجد
         try:
             play_btn = await page.query_selector('video, .play-btn, .vjs-big-play-button, .jw-icon-display')
             if play_btn: await play_btn.click()
         except: pass
         
-        # نضغط على الشاشة
         await page.mouse.click(400, 300)
         
         # ننتظر 12 ثانية عشان يخلص الإعلان ويطلع البث الحقيقي
@@ -196,7 +195,8 @@ async def main():
                 if stream_url:
                     if PROXY_URL:
                         clean_proxy = PROXY_URL.rstrip('/')
-                        final_link = f"{clean_proxy}/?u={quote(stream_url)}"
+                        # 🔥 التعديل الجديد: safe='' يضمن ترميز الرابط بشكل آمن جداً
+                        final_link = f"{clean_proxy}/?u={quote(stream_url, safe='')}"
                     else:
                         final_link = stream_url
                     
