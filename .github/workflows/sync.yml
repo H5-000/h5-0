@@ -5,7 +5,7 @@ permissions:
 
 on:
   schedule:
-    - cron: '*/10 * * * *' 
+    - cron: '*/5 * * * *' 
   workflow_dispatch: 
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install requests playwright deep-translator rapidfuzz
+          pip install requests playwright rapidfuzz deep-translator
           playwright install chromium
       - name: Run script
         env:
