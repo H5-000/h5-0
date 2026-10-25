@@ -5,49 +5,29 @@ import asyncio
 import requests
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright
-from rapidfuzz import fuzz
-from deep_translator import MyMemoryTranslator
-from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-TEAMS_FILE = 'teams_ar.json'
-if os.path.exists(TEAMS_FILE):
-    with open(TEAMS_FILE, 'r', encoding='utf-8') as f:
-        TEAM_MAP = json.load(f)
-else:
-    TEAM_MAP = {}
-
-def save_teams():
-    with open(TEAMS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(TEAM_MAP, f, ensure_ascii=False, indent=2)
-
-def normalize_arabic(text):
-    if not text: return ""
-    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
-    text = re.sub(r'[أإآ]', 'ا', text)
-    text = re.sub(r'ة', 'ه', text)
-    text = re.sub(r'ى', 'ي', text)
-    text = re.sub(r'\s+', '', text)
-    return text
-
-async def fetch_arabic_name_from_sofascore(team_name_en):
-    try:
-        url = f"https://api.sofascore.com/api/v1/search/all?q={requests.utils.quote(team_name_en)}"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            for result in data.get("results", []):
-                entity = result.get("entity", {})
-                if entity.get("name", "").lower() == team_name_en.lower():
-                    translations = entity.get("fieldTranslations", {}).get("nameTranslation", {})
-                    if "ar" in translations:
-                        return translations["ar"]
-    except Exception:
-        pass
-    return None
+# قاموس ضخم لأشهر الفرق (يمنع الترجمة الغبية)
+TEAM_DICT = {
+    "Getafe": "خيتافي", "Athletic Club": "أتلتيك بلباو", "Athletic Bilbao": "أتلتيك بلباو",
+    "PSV": "آيندهوفن", "Feyenoord": "فاينورد", "Bournemouth": "بورنموث",
+    "Manchester United": "مانشستر يونايتد", "Liverpool": "ليفربول", "Brighton": "برايتون",
+    "Newcastle": "نيوكاسل", "Crystal Palace": "كريستال بالاس", "Real Madrid": "ريال مدريد",
+    "Barcelona": "برشلونة", "Atletico Madrid": "أتلتيكو مدريد", "Sevilla": "إشبيلية",
+    "Real Betis": "ريال بيتيس", "Celta Vigo": "سيلتا فيغو", "Valencia": "فالنسيا",
+    "Villarreal": "فياريال", "Real Sociedad": "ريال سوسيداد", "Girona": "جيرونا",
+    "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Chelsea": "تشيلسي", "Tottenham": "توتنهام",
+    "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "Bayer Leverkusen": "ليفركوزن",
+    "Hoffenheim": "هوفنهايم", "Stuttgart": "شتوتغارت", "RB Leipzig": "لايبزيغ",
+    "PSG": "باريس سان جيرمان", "Marseille": "مارسيليا", "Lyon": "ليون", "Monaco": "موناكو",
+    "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
+    "Inter": "إنتر", "Juventus": "يوفنتوس", "Milan": "ميلان", "Napoli": "نابولي",
+    "Roma": "روما", "Lazio": "لاتسيو", "Atalanta": "أتالانتا", "Fiorentina": "فيورنتينا",
+    "Al Shorta": "الشرطة", "Al Quwa Al Jawiya": "القوة الجوية", "Al Zawraa": "الزوراء"
+}
 
 async def get_matches():
     try:
@@ -56,14 +36,11 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# 🎯 دالة استخراج رابط الفيديو المباشر (بدون إعلانات)
 async def extract_stream(page, target_url):
     stream_url = None
-    
     def handle_response(response):
         nonlocal stream_url
         url = response.url
-        # نبحث فقط عن روابط الفيديو المباشرة
         if any(ext in url for ext in ['.m3u8', '.mpd', '.mp4']):
             if not stream_url: 
                 stream_url = url
@@ -71,15 +48,12 @@ async def extract_stream(page, target_url):
     page.on("response", handle_response)
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-        await page.wait_for_timeout(3000) # انتظار تحميل الصفحة
-        
-        # إذا ما لقى الرابط، نضغط على نص الشاشة عشان نشغل الفيديو
+        await page.wait_for_timeout(3000)
         if not stream_url:
             await page.mouse.click(400, 300)
-            await page.wait_for_timeout(5000) # ننتظر الفيديو يحمل
-            
+            await page.wait_for_timeout(5000)
     except Exception as e:
-        print(f"  ❌ خطأ: {e}")
+        pass
     finally:
         page.remove_listener("response", handle_response)
     return stream_url
@@ -109,89 +83,50 @@ async def main():
         )
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
-        
-        # ⚠️ لا نحظر الإعلانات هالمرة، لأننا نريد الفيديو يشتغل عشان نلتقط رابطه
-        # await page.route("**/*", lambda route: route.abort() ...) 
-
-        print("🌐 جاري سحب وتحليل كود صفحة koora7goal...")
-        try:
-            await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            html_content = await page.content()
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            all_links = []
-            for a_tag in soup.find_all('a', href=True):
-                link_text = a_tag.get_text(strip=True)
-                href = a_tag['href']
-                
-                if not link_text or len(link_text) < 5: continue
-                if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
-                
-                full_url = urljoin("https://koora7goal.com", href)
-                all_links.append({'text': link_text, 'href': full_url})
-            
-            print(f"✅ تم سحب {len(all_links)} رابط صالح.")
-        except Exception as e:
-            print(f"❌ فشل تحليل الصفحة: {e}")
-            await browser.close()
-            return
 
         links_to_update = {}
         
         for m in active_matches:
-            t1_id = str(m.get("home", {}).get("id", ""))
-            t2_id = str(m.get("away", {}).get("id", ""))
             t1_en = m.get("home", {}).get("name", "")
             t2_en = m.get("away", {}).get("name", "")
 
             if not t1_en or not t2_en: continue
 
-            t1_ar = TEAM_MAP.get(t1_id)
-            if not t1_ar:
-                t1_ar = await fetch_arabic_name_from_sofascore(t1_en)
-                if not t1_ar:
-                    try: t1_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t1_en)
-                    except: t1_ar = t1_en
-                TEAM_MAP[t1_id] = t1_ar
-            
-            t2_ar = TEAM_MAP.get(t2_id)
-            if not t2_ar:
-                t2_ar = await fetch_arabic_name_from_sofascore(t2_en)
-                if not t2_ar:
-                    try: t2_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t2_en)
-                    except: t2_ar = t2_en
-                TEAM_MAP[t2_id] = t2_ar
+            # 1. استخدام القاموس
+            t1_ar = TEAM_DICT.get(t1_en, t1_en)
+            t2_ar = TEAM_DICT.get(t2_en, t2_en)
 
             print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
 
             target_url = None
-            best_score = 0
             
-            for link in all_links:
-                norm_link = normalize_arabic(link['text'])
-                score1 = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
-                score2 = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
-                combined = (score1 + score2) / 2
-
-                if combined > 65 and combined > best_score:
-                    best_score = combined
-                    target_url = link['href']
+            try:
+                # 2. فتح الصفحة الرئيسية لموقع koora
+                await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=30000)
+                
+                # 3. البحث الذكي: نبحث عن رابط (a) يحتوي على نص فيه اسم الفريق الأول
+                # محرك Playwright يبحث في كل الصفحة عن النص، وياخذ الرابط التابع له
+                locator = page.locator(f"a:has-text('{t1_ar}')").first
+                
+                if await locator.count() > 0:
+                    href = await locator.get_attribute("href")
+                    if href:
+                        target_url = urljoin("https://koora7goal.com", href)
+                        print(f"  -> تم العثور على الرابط: {target_url}")
+            except Exception as e:
+                print(f"  ⚠️ خطأ في البحث: {e}")
 
             if target_url:
-                print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
                 if stream_url:
-                    # نحفظ الرابط المباشر في موقعك
                     links_to_update[str(m.get("id"))] = {"link": stream_url, "mode": "embed"}
-                    print(f"  ✅ تم التقاط رابط الفيديو المباشر!")
+                    print(f"  ✅ تم التقاط رابط الفيديو!")
                 else:
-                    print(f"  ⚠️ الصفحة فتحت بس ما قدرنا نلتقط الفيديو.")
+                    print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
             else:
-                print(f"  ⚠️ لا يوجد تطابق كافٍ.")
+                print(f"  ⚠️ المباراة غير موجودة في الصفحة الرئيسية حالياً.")
 
         await browser.close()
-
-    save_teams()
 
     if links_to_update:
         print(f"📤 جاري تحديث موقعك بـ {len(links_to_update)} رابط...")
@@ -201,7 +136,7 @@ async def main():
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
         print("🎉 تم التحديث بنجاح!")
     else:
-        print("⚠️ لم يتم العثور على روابط جديدة.")
+        print("⚠️ لم يتم العثور على روابط جديدة. (قد لا تكون المباريات معروضة في الصفحة الرئيسية).")
 
 if __name__ == "__main__":
     asyncio.run(main())
