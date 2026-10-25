@@ -75,26 +75,39 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
+# 🔥 التعديل الجديد: دالة استخراج البث تتجاهل الإعلانات
 async def extract_stream(page, target_url):
-    stream_url = None
+    stream_urls = []
     def handle_response(response):
-        nonlocal stream_url
         url = response.url
-        if any(ext in url for ext in ['.m3u8', '.mpd', '.mp4']):
-            if not stream_url: stream_url = url
+        if any(ext in url for ext in ['.m3u8', '.mpd']):
+            stream_urls.append(url)
 
     page.on("response", handle_response)
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
-        if not stream_url:
-            await page.mouse.click(400, 300)
-            await page.wait_for_timeout(5000)
-    except Exception as e:
+        
+        # محاولة الضغط على زر التشغيل إذا وجد
+        try:
+            play_btn = await page.query_selector('video, .play-btn, .vjs-big-play-button, .jw-icon-display')
+            if play_btn: await play_btn.click()
+        except: pass
+        
+        # نضغط على الشاشة
+        await page.mouse.click(400, 300)
+        
+        # ننتظر 12 ثانية عشان يخلص الإعلان ويطلع البث الحقيقي
+        await page.wait_for_timeout(12000)
+    except Exception:
         pass
     finally:
         page.remove_listener("response", handle_response)
-    return stream_url
+
+    # نختار آخر رابط فيديو تم التقاطه (لأن الأول عادة يكون إعلان)
+    if stream_urls:
+        return stream_urls[-1] 
+    return None
 
 async def main():
     if not ADMIN_PASSWORD:
@@ -124,13 +137,10 @@ async def main():
         print("🌐 جاري فتح الصفحة الرئيسية...")
         try:
             await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            # ننتظر 5 ثواني إضافية حتى تظهر كل المباريات
             await page.wait_for_timeout(5000)
             
-            # نسحب كل النصوص من الصفحة (حتى لو كانت داخل أزرار أو أقسام)
             all_elements = await page.evaluate('''() => {
                 let results = [];
-                // نبحث عن كل العناصر التي تحتوي على نص
                 document.querySelectorAll('a, button, div[onclick], div.match-card, .match-item').forEach(el => {
                     let text = el.innerText || el.textContent;
                     let href = el.href || null;
@@ -140,7 +150,6 @@ async def main():
                 });
                 return results;
             }''')
-            
             print(f"✅ تم سحب {len(all_elements)} عنصر نصي من الصفحة.")
         except Exception as e:
             print(f"❌ فشل تحميل الموقع: {e}")
@@ -170,20 +179,17 @@ async def main():
             for el in all_elements:
                 norm_text = normalize_arabic(el['text'])
                 
-                # إذا النص يحتوي على اسم الفريقين معاً
                 if norm_t1 in norm_text and norm_t2 in norm_text:
                     if el['href']:
                         target_url = el['href']
                         best_score = 100
                         break
                 
-                # أو إذا كان التشابه عالي
                 score = fuzz.token_set_ratio(norm_match_name, norm_text)
                 if score > 70 and score > best_score and el['href']:
                     best_score = score
                     target_url = el['href']
 
-            # إذا لقينا رابط مباراة
             if target_url:
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
@@ -195,14 +201,11 @@ async def main():
                         final_link = stream_url
                     
                     links_to_update[str(m.get("id"))] = {"link": final_link, "mode": "embed"}
-                    print(f"  ✅ تم التقاط الفيديو وتمريره للبروكسي!")
+                    print(f"  ✅ تم التقاط الفيديو الحقيقي (بعد تخطي الإعلانات)!")
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
             else:
-                # إذا ما لقينا الرابط، نطبع أول 3 نصوص قريبة للبحث عشان نعرف شلون الموقع يكتبها
-                print(f"  ⚠️ المباراة غير موجودة بالصفحة (نطبع عينات للتشخيص):")
-                for el in all_elements[:5]:
-                    print(f"     - {el['text'][:30]}...")
+                print(f"  ⚠️ المباراة غير موجودة بالصفحة.")
 
         await browser.close()
 
