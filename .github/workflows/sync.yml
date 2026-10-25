@@ -15,7 +15,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install requests playwright
+          pip install requests playwright deep-translator rapidfuzz
           playwright install chromium
       - name: Run script
         env:
