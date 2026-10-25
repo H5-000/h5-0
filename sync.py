@@ -3,27 +3,20 @@ import re
 import asyncio
 import requests
 from playwright.async_api import async_playwright
+from deep_translator import GoogleTranslator
+from rapidfuzz import fuzz
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-TEAM_DICT = {
-    "Inter": "إنتر", "Juventus": "يوفنتوس", "Venezia": "فينيسيا", "Genoa": "جنوى", "Monza": "مونزا", "Napoli": "نابولي",
-    "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة", "Atletico Madrid": "أتلتيكو مدريد", "Sevilla": "إشبيلية",
-    "Man City": "مانشستر سيتي", "Man United": "مانشستر يونايتد", "Liverpool": "ليفربول", "Arsenal": "أرسنال", "Chelsea": "تشيلسي", "Tottenham": "توتنهام",
-    "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "PSG": "باريس سان جيرمان", "Marseille": "مارسيليا",
-    "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
-    "Iraq": "العراق", "Saudi Arabia": "السعودية", "Egypt": "مصر", "Morocco": "المغرب"
-}
-
-# دالة تنظيف النصوص العربية (تتجاهل الهمزات والمسافات والتاء المربوطة)
+# دالة تنظيف النصوص
 def normalize_arabic(text):
     if not text: return ""
     text = re.sub(r"[أإآا]", "ا", text)
     text = re.sub(r"ة", "ه", text)
     text = re.sub(r"ى", "ي", text)
-    text = re.sub(r"\s+", "", text) # حذف كل المسافات
+    text = re.sub(r"\s+", "", text)
     return text
 
 async def get_matches():
@@ -33,7 +26,6 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# دالة تسريع المتصفح (تمنع تحميل الصور والإعلانات)
 async def block_heavy_resources(route):
     if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
         await route.abort()
@@ -66,7 +58,6 @@ async def main():
         )
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
-        
         await page.route("**/*", block_heavy_resources)
 
         links_to_update = {}
@@ -84,46 +75,58 @@ async def main():
             return
 
         for m in active_matches:
-            t1 = m.get("home", {}).get("name")
-            t2 = m.get("away", {}).get("name")
-            if not t1 or not t2: continue
+            t1_en = m.get("home", {}).get("name")
+            t2_en = m.get("away", {}).get("name")
+            if not t1_en or not t2_en: continue
             
-            ar_t1 = TEAM_DICT.get(t1, t1)
-            ar_t2 = TEAM_DICT.get(t2, t2)
-            
-            # تنظيف الأسماء للبحث الدقيق
+            # الترجمة التلقائية من الإنجليزي للعربي
+            try:
+                ar_t1 = GoogleTranslator(source='en', target='ar').translate(t1_en)
+                ar_t2 = GoogleTranslator(source='en', target='ar').translate(t2_en)
+            except:
+                ar_t1, ar_t2 = t1_en, t2_en # إذا فشلت الترجمة نستخدم الاسم الإنجليزي
+
             norm_t1 = normalize_arabic(ar_t1)
             norm_t2 = normalize_arabic(ar_t2)
             
-            print(f"🔍 جاري البحث عن رابط: {ar_t1} ضد {ar_t2}")
+            print(f"🔍 جاري البحث عن: {ar_t1} ضد {ar_t2} ({t1_en} vs {t2_en})")
             
             target_url = None
+            best_score = 0
+            
             for link in all_links:
-                # السر هنا: نطلب وجود اسم الفريقين معاً في الرابط
                 norm_link_text = normalize_arabic(link['text'])
-                if norm_t1 in norm_link_text and norm_t2 in norm_link_text:
+                
+                # خوارزمية التشابه: نقارن اسم الفريق الأول + الثاني مع نص الرابط
+                score1 = fuzz.token_set_ratio(norm_t1, norm_link_text)
+                score2 = fuzz.token_set_ratio(norm_t2, norm_link_text)
+                
+                # إذا كان النص يحتوي على تشابه عالي للفريقين معاً
+                combined_score = (score1 + score2) / 2
+                
+                # إذا وصلت نسبة التشابه 75% أو أكثر، نعتبرها نفس المباراة!
+                if combined_score > 75 and combined_score > best_score:
+                    best_score = combined_score
                     target_url = link['href']
-                    break
             
             if target_url:
                 try:
-                    print(f"  -> دخول لصفحة المباراة...")
+                    print(f"  -> دخول لصفحة المباراة (نسبة التطابق: {best_score}%)...")
                     await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
                     
                     try:
-                        # ننتظر ظهور الـ iframe (شاشة البث)
-                        iframe_element = await page.wait_for_selector("iframe", timeout=5000)
+                        iframe_element = await page.wait_for_selector("iframe", timeout=6000)
                         src = await iframe_element.get_attribute("src")
                         if src:
                             if src.startswith("//"): src = "https:" + src
                             links_to_update[str(m.get("id"))] = {"link": src, "mode": "embed"}
-                            print(f"  ✅ تم إيجاد الرابط وتخصيصه بدقة!")
+                            print(f"  ✅ تم إيجاد الرابط!")
                     except:
-                        print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر.")
+                        print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر (المباراة يمكن ما بدأت).")
                 except Exception as e:
                     print(f"  ❌ خطأ بالدخول: {e}")
             else:
-                print(f"  ⚠️ لم نجد رابط يطابق الفريقين معاً.")
+                print(f"  ⚠️ لم نجد أي رابط يتطابق ولو بنسبة 75%.")
 
         await browser.close()
 
@@ -133,7 +136,7 @@ async def main():
         cfg = cfg_res.json()
         cfg["links"] = {**cfg.get("links", {}), **links_to_update}
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
-        print("🎉 تم التحديث بنجاح! الروابط مخصصة بدقة.")
+        print("🎉 تم التحديث بنجاح! تم استخدام الذكاء الاصطناعي للمطابقة.")
     else:
         print("⚠️ لم يتم العثور على روابط جديدة.")
 
