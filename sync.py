@@ -7,7 +7,6 @@ API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-# قاموس لترجمة أسماء الفرق من الإنجليزي للعربي (موقعك المصدر عربي)
 TEAM_DICT = {
     "Inter": "إنتر", "Juventus": "يوفنتوس", "Venezia": "فينيسيا", "Genoa": "جنوى", "Monza": "مونزا", "Napoli": "نابولي",
     "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة", "Atletico Madrid": "أتلتيكو مدريد", "Sevilla": "إشبيلية",
@@ -25,21 +24,19 @@ async def get_matches():
     return []
 
 async def extract_stream(page, team1, team2):
-    # ترجمة الأسماء للعربي
     ar_t1 = TEAM_DICT.get(team1, team1)
     ar_t2 = TEAM_DICT.get(team2, team2)
 
     try:
         await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=60000)
         
-        # محاولة إيجاد رابط يحتوي على الفريقين معاً، أو فريق واحد على الأقل
         link = page.locator(f"a:has-text('{ar_t1}')").first
         if await link.count() == 0:
             link = page.locator(f"a:has-text('{ar_t2}')").first
             
         if await link.count() > 0:
             await link.click()
-            await page.wait_for_timeout(5000) # انتظار 5 ثواني لتحميل المشغل
+            await page.wait_for_timeout(4000) 
             iframe = await page.query_selector("iframe")
             if iframe:
                 src = await iframe.get_attribute("src")
@@ -47,7 +44,7 @@ async def extract_stream(page, team1, team2):
                     src = "https:" + src
                 return src
     except Exception as e:
-        print(f"Error extracting {ar_t1} vs {ar_t2}: {e}")
+        print(f"خطأ في {ar_t1} ضد {ar_t2}: {e}")
     return None
 
 async def main():
@@ -62,7 +59,14 @@ async def main():
     token = r.json().get("token")
 
     fixtures = await get_matches()
-    print(f"📊 تم جلب {len(fixtures)} مباراة من موقعك")
+    
+    # 💡 هنا السر: نصفي المباريات وناخذ بس المباشرة أو القادمة (نتجاهل المنتهية)
+    active_matches = [m for m in fixtures if m.get("status") in ["live", "soon"]]
+    print(f"📊 إجمالي المباريات: {len(fixtures)} | المباريات النشطة (مباشر/قادم): {len(active_matches)}")
+
+    if not active_matches:
+        print("⚠️ لا توجد مباريات مباشرة أو قادمة حالياً للتحديث.")
+        return
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -73,7 +77,7 @@ async def main():
         page = await context.new_page()
 
         links_to_update = {}
-        for m in fixtures:
+        for m in active_matches:
             t1 = m.get("home", {}).get("name")
             t2 = m.get("away", {}).get("name")
             if not t1 or not t2: continue
@@ -97,7 +101,7 @@ async def main():
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
         print("🎉 تم التحديث بنجاح!")
     else:
-        print("⚠️ لم يتم العثور على روابط جديدة. (تأكد أن المباريات معروضة في الصفحة الرئيسية للموقع)")
+        print("⚠️ لم يتم العثور على روابط جديدة. (قد يكون الموقع المصدر محظر الـ IP أو الأسماء مختلفة).")
 
 if __name__ == "__main__":
     asyncio.run(main())
