@@ -1,0 +1,24 @@
+name: Sync Streams
+on:
+  schedule:
+    - cron: '*/10 * * * *' 
+  workflow_dispatch: 
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install requests playwright
+          playwright install chromium
+      - name: Run script
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
+        run: python sync.py
