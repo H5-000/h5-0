@@ -6,20 +6,19 @@ import requests
 from urllib.parse import urljoin, quote
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
-from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-# 📚 القاموس (تمت إضافة الفرق الناقصة اللي بالصورة)
+# 📚 القاموس الشامل
 TEAM_DICT = {
     "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
     "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
     "Brighton": "برايتون", "West Ham": "وست هام", "Crystal Palace": "كريستال بالاس", "Brentford": "برينتفورد",
     "Fulham": "فولهام", "Everton": "إيفرتون", "Wolves": "وولفرهامبتون", "Bournemouth": "بورنموث",
     "Nottingham Forest": "نوتينغهام فورست", "Leicester": "ليستر سيتي", "Southampton": "ساوثهامبتون",
-    "Leeds": "ليدز", "Leeds United": "ليدز", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
+    "Leeds": "ليدز", "Leeds United": "ليدز يونايتد", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
     "Atletico Madrid": "أتلتيكو مدريد", "Athletic Club": "أتلتيك بلباو", "Real Sociedad": "ريال سوسيداد",
     "Real Betis": "ريال بيتيس", "Villarreal": "فياريال", "Valencia": "فالنسيا", "Sevilla": "إشبيلية",
     "Girona": "جيرونا", "Celta Vigo": "سيلتا فيغو", "Osasuna": "أوساسونا", "Mallorca": "مايوركا",
@@ -42,23 +41,17 @@ TEAM_DICT = {
     "Al Najaf": "النجف", "Al Ahly": "الأهلي", "Zamalek": "الزمالك", "Pyramids": "بيراميدز", "Wydad": "الوداد",
     "Raja Casablanca": "الرجاء", "Esperance": "الترجي", "TP Mazembe": "تي بي مازيمبي", "Flamengo": "فلامنغو",
     "Palmeiras": "بالميراس", "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس",
-    "Fluminense": "فلوميننسي", "Bahia": "باهيا", "Chapecoense": "شابيكوينسي", "Chapecoense": "شابيكوينسي",
-    "Nacional": "ناسيونال", "CD Nacional": "ناسيونال", "Sparta": "سبارتا", "Sparta Rotterdam": "سبارتا روتردام",
+    "Fluminense": "فلوميننسي", "Bahia": "باهيا", "Chapecoense": "شابيكوينسي", "Nacional": "ناسيونال", "CD Nacional": "ناسيونال", "Sparta": "سبارتا", "Sparta Rotterdam": "سبارتا روتردام",
     "AZ Alkmaar": "ألكمار", "Parma": "بارما", "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", 
     "Preston": "بريستون", "Lincoln City": "لينكولن", "Birmingham": "برمنغهام", "Elversberg": "إلفرسبيرغ", 
-    "Norwich": "نورويتش", "Watford": "واتفورد"
+    "Norwich": "نورويتش", "Watford": "واتفورد", "Rio Ave": "ريو أفي", "Famalicao": "فاماليكاو"
 }
 
-# دالة ذكية للبحث عن الاسم العربي (حتى لو كان الاسم ناقص أو زيادة)
 def get_arabic_name(en_name):
     if not en_name: return ""
-    # إذا الاسم موجود حرفياً
-    if en_name in TEAM_DICT:
-        return TEAM_DICT[en_name]
-    
-    # إذا مو موجود، نبحث عن أقرب تطابق بالقاموس
+    if en_name in TEAM_DICT: return TEAM_DICT[en_name]
     best_score = 0
-    best_match = en_name # إذا ما لقينا شي، نرجع الاسم الإنجليزي
+    best_match = en_name
     for en_key, ar_val in TEAM_DICT.items():
         score = fuzz.token_set_ratio(en_name.lower(), en_key.lower())
         if score > 80 and score > best_score:
@@ -128,25 +121,27 @@ async def main():
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
-        print("🌐 جاري سحب كافة الروابط من الصفحة الرئيسية...")
+        print("🌐 جاري فتح الصفحة الرئيسية...")
         try:
             await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            html_content = await page.content()
-            soup = BeautifulSoup(html_content, 'html.parser')
+            # ننتظر 5 ثواني إضافية حتى تظهر كل المباريات
+            await page.wait_for_timeout(5000)
             
-            all_links = []
-            for a_tag in soup.find_all('a', href=True):
-                link_text = a_tag.get_text(strip=True)
-                href = a_tag['href']
-                
-                # خفضنا الشرط إلى حرفين عشان ما نضيع مباريات أسماء فرقها قصيرة
-                if not link_text or len(link_text) < 2: continue
-                if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
-                
-                full_url = urljoin("https://koora7goal.com", href)
-                all_links.append({'text': link_text, 'href': full_url})
+            # نسحب كل النصوص من الصفحة (حتى لو كانت داخل أزرار أو أقسام)
+            all_elements = await page.evaluate('''() => {
+                let results = [];
+                // نبحث عن كل العناصر التي تحتوي على نص
+                document.querySelectorAll('a, button, div[onclick], div.match-card, .match-item').forEach(el => {
+                    let text = el.innerText || el.textContent;
+                    let href = el.href || null;
+                    if (text && text.trim().length > 3) {
+                        results.push({ text: text.trim(), href: href });
+                    }
+                });
+                return results;
+            }''')
             
-            print(f"✅ تم سحب {len(all_links)} رابط من الصفحة.")
+            print(f"✅ تم سحب {len(all_elements)} عنصر نصي من الصفحة.")
         except Exception as e:
             print(f"❌ فشل تحميل الموقع: {e}")
             await browser.close()
@@ -159,7 +154,6 @@ async def main():
             t2_en = m.get("away", {}).get("name", "")
             if not t1_en or not t2_en: continue
 
-            # استخدام الدالة الذكية للترجمة
             t1_ar = get_arabic_name(t1_en)
             t2_ar = get_arabic_name(t2_en)
             match_name_ar = f"{t1_ar} {t2_ar}"
@@ -169,16 +163,27 @@ async def main():
             target_url = None
             best_score = 0
             
+            norm_t1 = normalize_arabic(t1_ar)
+            norm_t2 = normalize_arabic(t2_ar)
             norm_match_name = normalize_arabic(match_name_ar)
 
-            for link in all_links:
-                norm_link_text = normalize_arabic(link['text'])
-                score = fuzz.token_set_ratio(norm_match_name, norm_link_text)
+            for el in all_elements:
+                norm_text = normalize_arabic(el['text'])
                 
-                if score > 65 and score > best_score:
+                # إذا النص يحتوي على اسم الفريقين معاً
+                if norm_t1 in norm_text and norm_t2 in norm_text:
+                    if el['href']:
+                        target_url = el['href']
+                        best_score = 100
+                        break
+                
+                # أو إذا كان التشابه عالي
+                score = fuzz.token_set_ratio(norm_match_name, norm_text)
+                if score > 70 and score > best_score and el['href']:
                     best_score = score
-                    target_url = link['href']
+                    target_url = el['href']
 
+            # إذا لقينا رابط مباراة
             if target_url:
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
@@ -194,7 +199,10 @@ async def main():
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
             else:
-                print(f"  ⚠️ المباراة غير موجودة بالصفحة الرئيسية حالياً.")
+                # إذا ما لقينا الرابط، نطبع أول 3 نصوص قريبة للبحث عشان نعرف شلون الموقع يكتبها
+                print(f"  ⚠️ المباراة غير موجودة بالصفحة (نطبع عينات للتشخيص):")
+                for el in all_elements[:5]:
+                    print(f"     - {el['text'][:30]}...")
 
         await browser.close()
 
