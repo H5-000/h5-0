@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 import requests
+from urllib.parse import urljoin  # <--- مكتبة لحل مشكلة الروابط الناقصة
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from deep_translator import MyMemoryTranslator
@@ -12,7 +13,6 @@ API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-# تحميل قاموس الأسماء
 TEAMS_FILE = 'teams_ar.json'
 if os.path.exists(TEAMS_FILE):
     with open(TEAMS_FILE, 'r', encoding='utf-8') as f:
@@ -33,6 +33,22 @@ def normalize_arabic(text):
     text = re.sub(r'\s+', '', text)
     return text
 
+async def fetch_arabic_name_from_sofascore(team_name_en):
+    try:
+        url = f"https://api.sofascore.com/api/v1/search/all?q={requests.utils.quote(team_name_en)}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            for result in data.get("results", []):
+                entity = result.get("entity", {})
+                if entity.get("name", "").lower() == team_name_en.lower():
+                    translations = entity.get("fieldTranslations", {}).get("nameTranslation", {})
+                    if "ar" in translations:
+                        return translations["ar"]
+    except Exception as e:
+        pass
+    return None
+
 async def get_matches():
     try:
         r = requests.get(f"{API_BASE}/fixtures")
@@ -40,7 +56,6 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# دالة استخراج البث
 async def extract_stream(page, target_url):
     stream_url = None
     async def handle_response(response):
@@ -95,21 +110,26 @@ async def main():
 
         print("🌐 جاري سحب وتحليل كود صفحة koora7goal...")
         try:
-            # انتظار أطول لضمان تحميل المباريات عبر جافاسكربت
             await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            
-            # استخدام BeautifulSoup لتحليل كامل كود الصفحة
             html_content = await page.content()
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # استخراج كل الروابط التي تحتوي على نص عربي
             all_links = []
+            # استخراج الروابط وإصلاح الروابط الناقصة
             for a_tag in soup.find_all('a', href=True):
                 link_text = a_tag.get_text(strip=True)
-                if link_text and len(link_text) > 3:
-                    all_links.append({'text': link_text, 'href': a_tag['href']})
+                href = a_tag['href']
+                
+                # تجاهل الروابط التي لا تحتوي على نص، أو روابط القوائم العامة
+                if not link_text or len(link_text) < 5: continue
+                if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
+                
+                # إصلاح الرابط الناقص (إضافة الدومين إذا كان يبدأ بـ /)
+                full_url = urljoin("https://koora7goal.com", href)
+                
+                all_links.append({'text': link_text, 'href': full_url})
             
-            print(f"✅ تم سحب {len(all_links)} رابط يحتوي على نص عربي.")
+            print(f"✅ تم سحب {len(all_links)} رابط صالح.")
         except Exception as e:
             print(f"❌ فشل تحليل الصفحة: {e}")
             await browser.close()
@@ -126,16 +146,19 @@ async def main():
             if not t1_en or not t2_en: continue
 
             t1_ar = TEAM_MAP.get(t1_id)
-            t2_ar = TEAM_MAP.get(t2_id)
-
             if not t1_ar:
-                try: t1_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t1_en)
-                except: t1_ar = t1_en
+                t1_ar = await fetch_arabic_name_from_sofascore(t1_en)
+                if not t1_ar:
+                    try: t1_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t1_en)
+                    except: t1_ar = t1_en
                 TEAM_MAP[t1_id] = t1_ar
             
+            t2_ar = TEAM_MAP.get(t2_id)
             if not t2_ar:
-                try: t2_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t2_en)
-                except: t2_ar = t2_en
+                t2_ar = await fetch_arabic_name_from_sofascore(t2_en)
+                if not t2_ar:
+                    try: t2_ar = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(t2_en)
+                    except: t2_ar = t2_en
                 TEAM_MAP[t2_id] = t2_ar
 
             print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
@@ -143,15 +166,22 @@ async def main():
             target_url = None
             best_score = 0
             
-            # البحث عن أفضل تطابق بين النص المستخرج والاسم العربي
             for link in all_links:
                 norm_link = normalize_arabic(link['text'])
-                score1 = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
-                score2 = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
-                combined = (score1 + score2) / 2
+                
+                # مقارنة مع الاسم العربي
+                score1_ar = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
+                score2_ar = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
+                
+                # مقارنة مع الاسم الإنجليزي (في حال كان الموقع يستخدمه)
+                score1_en = fuzz.token_set_ratio(normalize_arabic(t1_en), norm_link)
+                score2_en = fuzz.token_set_ratio(normalize_arabic(t2_en), norm_link)
+                
+                # نأخذ أعلى نسبة تطابق
+                combined = max((score1_ar + score2_ar) / 2, (score1_en + score2_en) / 2)
 
-                # خفضنا العتبة إلى 55% لأننا نبحث الآن في كامل كود الصفحة
-                if combined > 55 and combined > best_score:
+                # رفعنا العتبة إلى 65% لضمان دقة الروابط
+                if combined > 65 and combined > best_score:
                     best_score = combined
                     target_url = link['href']
 
@@ -164,7 +194,7 @@ async def main():
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر.")
             else:
-                print(f"  ⚠️ لا يوجد تطابق كافٍ (أعلى نسبة: {round(best_score)}%).")
+                print(f"  ⚠️ لا يوجد تطابق كافٍ.")
 
         await browser.close()
 
