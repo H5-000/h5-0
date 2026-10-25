@@ -3,7 +3,7 @@ import re
 import json
 import asyncio
 import requests
-from urllib.parse import urljoin  # <--- مكتبة لحل مشكلة الروابط الناقصة
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from deep_translator import MyMemoryTranslator
@@ -45,7 +45,7 @@ async def fetch_arabic_name_from_sofascore(team_name_en):
                     translations = entity.get("fieldTranslations", {}).get("nameTranslation", {})
                     if "ar" in translations:
                         return translations["ar"]
-    except Exception as e:
+    except Exception:
         pass
     return None
 
@@ -56,25 +56,28 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
+# 🎯 دالة استخراج رابط الفيديو المباشر (بدون إعلانات)
 async def extract_stream(page, target_url):
     stream_url = None
-    async def handle_response(response):
+    
+    def handle_response(response):
         nonlocal stream_url
         url = response.url
-        if any(ext in url for ext in ['.m3u8', '.mpd', 'embed', 'player']):
-            if not stream_url: stream_url = url
+        # نبحث فقط عن روابط الفيديو المباشرة
+        if any(ext in url for ext in ['.m3u8', '.mpd', '.mp4']):
+            if not stream_url: 
+                stream_url = url
 
     page.on("response", handle_response)
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-        await page.wait_for_timeout(4000)
+        await page.wait_for_timeout(3000) # انتظار تحميل الصفحة
+        
+        # إذا ما لقى الرابط، نضغط على نص الشاشة عشان نشغل الفيديو
         if not stream_url:
-            iframe = await page.query_selector("iframe")
-            if iframe:
-                src = await iframe.get_attribute("src")
-                if src:
-                    if src.startswith("//"): src = "https:" + src
-                    stream_url = src
+            await page.mouse.click(400, 300)
+            await page.wait_for_timeout(5000) # ننتظر الفيديو يحمل
+            
     except Exception as e:
         print(f"  ❌ خطأ: {e}")
     finally:
@@ -106,7 +109,9 @@ async def main():
         )
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
-        await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
+        
+        # ⚠️ لا نحظر الإعلانات هالمرة، لأننا نريد الفيديو يشتغل عشان نلتقط رابطه
+        # await page.route("**/*", lambda route: route.abort() ...) 
 
         print("🌐 جاري سحب وتحليل كود صفحة koora7goal...")
         try:
@@ -115,18 +120,14 @@ async def main():
             soup = BeautifulSoup(html_content, 'html.parser')
             
             all_links = []
-            # استخراج الروابط وإصلاح الروابط الناقصة
             for a_tag in soup.find_all('a', href=True):
                 link_text = a_tag.get_text(strip=True)
                 href = a_tag['href']
                 
-                # تجاهل الروابط التي لا تحتوي على نص، أو روابط القوائم العامة
                 if not link_text or len(link_text) < 5: continue
                 if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
                 
-                # إصلاح الرابط الناقص (إضافة الدومين إذا كان يبدأ بـ /)
                 full_url = urljoin("https://koora7goal.com", href)
-                
                 all_links.append({'text': link_text, 'href': full_url})
             
             print(f"✅ تم سحب {len(all_links)} رابط صالح.")
@@ -168,19 +169,10 @@ async def main():
             
             for link in all_links:
                 norm_link = normalize_arabic(link['text'])
-                
-                # مقارنة مع الاسم العربي
-                score1_ar = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
-                score2_ar = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
-                
-                # مقارنة مع الاسم الإنجليزي (في حال كان الموقع يستخدمه)
-                score1_en = fuzz.token_set_ratio(normalize_arabic(t1_en), norm_link)
-                score2_en = fuzz.token_set_ratio(normalize_arabic(t2_en), norm_link)
-                
-                # نأخذ أعلى نسبة تطابق
-                combined = max((score1_ar + score2_ar) / 2, (score1_en + score2_en) / 2)
+                score1 = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
+                score2 = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
+                combined = (score1 + score2) / 2
 
-                # رفعنا العتبة إلى 65% لضمان دقة الروابط
                 if combined > 65 and combined > best_score:
                     best_score = combined
                     target_url = link['href']
@@ -189,10 +181,11 @@ async def main():
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
                 if stream_url:
+                    # نحفظ الرابط المباشر في موقعك
                     links_to_update[str(m.get("id"))] = {"link": stream_url, "mode": "embed"}
-                    print(f"  ✅ تم إيجاد الرابط!")
+                    print(f"  ✅ تم التقاط رابط الفيديو المباشر!")
                 else:
-                    print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر.")
+                    print(f"  ⚠️ الصفحة فتحت بس ما قدرنا نلتقط الفيديو.")
             else:
                 print(f"  ⚠️ لا يوجد تطابق كافٍ.")
 
