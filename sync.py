@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import requests
 from playwright.async_api import async_playwright
@@ -16,6 +17,15 @@ TEAM_DICT = {
     "Iraq": "العراق", "Saudi Arabia": "السعودية", "Egypt": "مصر", "Morocco": "المغرب"
 }
 
+# دالة تنظيف النصوص العربية (تتجاهل الهمزات والمسافات والتاء المربوطة)
+def normalize_arabic(text):
+    if not text: return ""
+    text = re.sub(r"[أإآا]", "ا", text)
+    text = re.sub(r"ة", "ه", text)
+    text = re.sub(r"ى", "ي", text)
+    text = re.sub(r"\s+", "", text) # حذف كل المسافات
+    return text
+
 async def get_matches():
     try:
         r = requests.get(f"{API_BASE}/fixtures")
@@ -23,29 +33,12 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-async def extract_stream(page, team1, team2):
-    ar_t1 = TEAM_DICT.get(team1, team1)
-    ar_t2 = TEAM_DICT.get(team2, team2)
-
-    try:
-        await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=60000)
-        
-        link = page.locator(f"a:has-text('{ar_t1}')").first
-        if await link.count() == 0:
-            link = page.locator(f"a:has-text('{ar_t2}')").first
-            
-        if await link.count() > 0:
-            await link.click()
-            await page.wait_for_timeout(4000) 
-            iframe = await page.query_selector("iframe")
-            if iframe:
-                src = await iframe.get_attribute("src")
-                if src and src.startswith("//"): 
-                    src = "https:" + src
-                return src
-    except Exception as e:
-        print(f"خطأ في {ar_t1} ضد {ar_t2}: {e}")
-    return None
+# دالة تسريع المتصفح (تمنع تحميل الصور والإعلانات)
+async def block_heavy_resources(route):
+    if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+        await route.abort()
+    else:
+        await route.continue_()
 
 async def main():
     if not ADMIN_PASSWORD:
@@ -59,13 +52,11 @@ async def main():
     token = r.json().get("token")
 
     fixtures = await get_matches()
-    
-    # 💡 هنا السر: نصفي المباريات وناخذ بس المباشرة أو القادمة (نتجاهل المنتهية)
     active_matches = [m for m in fixtures if m.get("status") in ["live", "soon"]]
-    print(f"📊 إجمالي المباريات: {len(fixtures)} | المباريات النشطة (مباشر/قادم): {len(active_matches)}")
+    print(f"📊 إجمالي المباريات: {len(fixtures)} | المباريات النشطة: {len(active_matches)}")
 
     if not active_matches:
-        print("⚠️ لا توجد مباريات مباشرة أو قادمة حالياً للتحديث.")
+        print("⚠️ لا توجد مباريات مباشرة أو قادمة حالياً.")
         return
 
     async with async_playwright() as p:
@@ -75,8 +66,23 @@ async def main():
         )
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
+        
+        await page.route("**/*", block_heavy_resources)
 
         links_to_update = {}
+        
+        print("🌐 جاري فتح الصفحة الرئيسية وسحب الروابط...")
+        try:
+            await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=30000)
+            all_links = await page.evaluate('''() => {
+                return Array.from(document.querySelectorAll('a')).map(a => ({text: a.innerText, href: a.href}));
+            }''')
+            print(f"✅ تم سحب {len(all_links)} رابط من الصفحة الرئيسية.")
+        except Exception as e:
+            print(f"❌ فشل فتح الصفحة الرئيسية: {e}")
+            await browser.close()
+            return
+
         for m in active_matches:
             t1 = m.get("home", {}).get("name")
             t2 = m.get("away", {}).get("name")
@@ -84,12 +90,40 @@ async def main():
             
             ar_t1 = TEAM_DICT.get(t1, t1)
             ar_t2 = TEAM_DICT.get(t2, t2)
-            print(f"🔍 جاري البحث عن: {ar_t1} ضد {ar_t2}")
             
-            url = await extract_stream(page, t1, t2)
-            if url:
-                links_to_update[str(m.get("id"))] = {"link": url, "mode": "embed"}
-                print(f"✅ تم إيجاد رابط البث لـ {ar_t1} ضد {ar_t2}")
+            # تنظيف الأسماء للبحث الدقيق
+            norm_t1 = normalize_arabic(ar_t1)
+            norm_t2 = normalize_arabic(ar_t2)
+            
+            print(f"🔍 جاري البحث عن رابط: {ar_t1} ضد {ar_t2}")
+            
+            target_url = None
+            for link in all_links:
+                # السر هنا: نطلب وجود اسم الفريقين معاً في الرابط
+                norm_link_text = normalize_arabic(link['text'])
+                if norm_t1 in norm_link_text and norm_t2 in norm_link_text:
+                    target_url = link['href']
+                    break
+            
+            if target_url:
+                try:
+                    print(f"  -> دخول لصفحة المباراة...")
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+                    
+                    try:
+                        # ننتظر ظهور الـ iframe (شاشة البث)
+                        iframe_element = await page.wait_for_selector("iframe", timeout=5000)
+                        src = await iframe_element.get_attribute("src")
+                        if src:
+                            if src.startswith("//"): src = "https:" + src
+                            links_to_update[str(m.get("id"))] = {"link": src, "mode": "embed"}
+                            print(f"  ✅ تم إيجاد الرابط وتخصيصه بدقة!")
+                    except:
+                        print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر.")
+                except Exception as e:
+                    print(f"  ❌ خطأ بالدخول: {e}")
+            else:
+                print(f"  ⚠️ لم نجد رابط يطابق الفريقين معاً.")
 
         await browser.close()
 
@@ -99,9 +133,9 @@ async def main():
         cfg = cfg_res.json()
         cfg["links"] = {**cfg.get("links", {}), **links_to_update}
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
-        print("🎉 تم التحديث بنجاح!")
+        print("🎉 تم التحديث بنجاح! الروابط مخصصة بدقة.")
     else:
-        print("⚠️ لم يتم العثور على روابط جديدة. (قد يكون الموقع المصدر محظر الـ IP أو الأسماء مختلفة).")
+        print("⚠️ لم يتم العثور على روابط جديدة.")
 
 if __name__ == "__main__":
     asyncio.run(main())
