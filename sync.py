@@ -3,14 +3,13 @@ import re
 import json
 import asyncio
 import requests
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-PROXY_URL = os.environ.get("PROXY_URL")
 
 # 📚 القاموس الشامل للفرق
 TEAM_DICT = {
@@ -76,36 +75,22 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# دالة استخراج البث تتخطى الإعلانات وتلتقط الرابط الحقيقي
-async def extract_stream(page, target_url):
-    stream_urls = []
-    def handle_response(response):
-        url = response.url
-        if any(ext in url for ext in ['.m3u8', '.mpd']):
-            stream_urls.append(url)
-
-    page.on("response", handle_response)
+# 🎯 دالة سحب رابط الـ iframe الأصلي فقط
+async def extract_iframe(page, target_url):
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
         
-        try:
-            play_btn = await page.query_selector('video, .play-btn, .vjs-big-play-button, .jw-icon-display')
-            if play_btn: await play_btn.click()
-        except: pass
-        
-        await page.mouse.click(400, 300)
-        
-        # ننتظر 12 ثانية عشان يخلص الإعلان ويطلع البث الحقيقي
-        await page.wait_for_timeout(12000)
-    except Exception:
-        pass
-    finally:
-        page.remove_listener("response", handle_response)
-
-    # نختار آخر رابط فيديو تم التقاطه (لأن الأول عادة يكون إعلان)
-    if stream_urls:
-        return stream_urls[-1] 
+        # نبحث عن أول iframe بالصفحة (هذا يكون مشغل البث)
+        iframe = await page.query_selector("iframe")
+        if iframe:
+            src = await iframe.get_attribute("src")
+            if src:
+                if src.startswith("//"):
+                    src = "https:" + src
+                return src
+    except Exception as e:
+        print(f"  ❌ خطأ في سحب iframe: {e}")
     return None
 
 async def main():
@@ -133,7 +118,7 @@ async def main():
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
-        print("🌐 جاري فتح الصفحة الرئيسية...")
+        print("🌐 جاري فتح الصفحة الرئيسية لـ koora7goal...")
         try:
             await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
             await page.wait_for_timeout(5000)
@@ -149,7 +134,7 @@ async def main():
                 });
                 return results;
             }''')
-            print(f"✅ تم سحب {len(all_elements)} عنصر نصي من الصفحة.")
+            print(f"✅ تم سحب {len(all_elements)} عنصر من الصفحة.")
         except Exception as e:
             print(f"❌ فشل تحميل الموقع: {e}")
             await browser.close()
@@ -191,19 +176,14 @@ async def main():
 
             if target_url:
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
-                stream_url = await extract_stream(page, target_url)
-                if stream_url:
-                    if PROXY_URL:
-                        clean_proxy = PROXY_URL.rstrip('/')
-                        # 🔥 التعديل الجديد: safe='' يضمن ترميز الرابط بشكل آمن جداً
-                        final_link = f"{clean_proxy}/?u={quote(stream_url, safe='')}"
-                    else:
-                        final_link = stream_url
-                    
-                    links_to_update[str(m.get("id"))] = {"link": final_link, "mode": "embed"}
-                    print(f"  ✅ تم التقاط الفيديو الحقيقي (بعد تخطي الإعلانات)!")
+                iframe_url = await extract_iframe(page, target_url)
+                
+                if iframe_url:
+                    # حفظ رابط الـ iframe مباشرة بدون بروكسي
+                    links_to_update[str(m.get("id"))] = {"link": iframe_url, "mode": "embed"}
+                    print(f"  ✅ تم التقاط رابط المشغل (iframe) وحفظه!")
                 else:
-                    print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
+                    print(f"  ⚠️ الصفحة فتحت بس ما لقينا مشغل (iframe).")
             else:
                 print(f"  ⚠️ المباراة غير موجودة بالصفحة.")
 
