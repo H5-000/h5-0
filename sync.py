@@ -6,12 +6,13 @@ import requests
 from urllib.parse import urljoin, quote
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
+from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-PROXY_URL = os.environ.get("PROXY_URL")
+PROXY_URL = os.environ.get("PROXY_URL") # هذا خاص بتشغيل الفيديو فقط
 
-# قاموس الفرق
+# 📚 القاموس الشامل للفرق
 TEAM_DICT = {
     "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
     "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
@@ -39,7 +40,12 @@ TEAM_DICT = {
     "Al Shorta": "الشرطة", "Al Quwa Al Jawiya": "القوة الجوية", "Al Zawraa": "الزوراء", "Al Talaba": "الطلبة",
     "Al Najaf": "النجف", "Al Ahly": "الأهلي", "Zamalek": "الزمالك", "Pyramids": "بيراميدز", "Wydad": "الوداد",
     "Raja Casablanca": "الرجاء", "Esperance": "الترجي", "TP Mazembe": "تي بي مازيمبي", "Flamengo": "فلامنغو",
-    "Palmeiras": "بالميراس", "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس"
+    "Palmeiras": "بالميراس", "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس",
+    "Falamicão": "فلامينغو", "CD Nacional": "ناسيونال", "AZ Alkmaar": "ألكمار", "Parma": "بارما",
+    "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", "Preston": "بريستون", "Lincoln City": "لينكولن",
+    "Birmingham": "برمنغهام", "Auxerre": "أوكسير", "Le Havre": "لوهافر", "Monza": "مونزا",
+    "Sheffield Utd": "شيفيلد يونايتد", "Wrexham": "ريكسهام", "Mainz": "ماينز", "Elversberg": "إلفرسبيرغ",
+    "Villarreal": "فياريال", "Espanyol": "إسبانيول", "Norwich": "نورويتش", "Watford": "واتفورد"
 }
 
 def normalize_arabic(text):
@@ -97,9 +103,9 @@ async def main():
     if not active_matches: return
 
     async with async_playwright() as p:
+        # ⚠️ تم إزالة البروكسي من هنا لكي لا يحدث خطأ في فتح الصفحة
         browser = await p.chromium.launch(
             headless=True,
-            proxy={"server": PROXY_URL} if PROXY_URL else None,
             args=["--disable-webrtc", "--no-sandbox"]
         )
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -108,13 +114,20 @@ async def main():
         print("🌐 جاري سحب كافة الروابط من الصفحة الرئيسية...")
         try:
             await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            # نسحب كل الروابط والنصوص الخاصة بها من الصفحة
-            all_links = await page.evaluate('''() => {
-                return Array.from(document.querySelectorAll('a')).map(a => ({
-                    text: a.innerText.trim(),
-                    href: a.href
-                })).filter(l => l.text.length > 5 && l.href.includes('koora7goal'));
-            }''')
+            html_content = await page.content()
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            all_links = []
+            for a_tag in soup.find_all('a', href=True):
+                link_text = a_tag.get_text(strip=True)
+                href = a_tag['href']
+                
+                if not link_text or len(link_text) < 5: continue
+                if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
+                
+                full_url = urljoin("https://koora7goal.com", href)
+                all_links.append({'text': link_text, 'href': full_url})
+            
             print(f"✅ تم سحب {len(all_links)} رابط من الصفحة.")
         except Exception as e:
             print(f"❌ فشل فتح الموقع: {e}")
@@ -130,7 +143,6 @@ async def main():
 
             t1_ar = TEAM_DICT.get(t1_en, t1_en)
             t2_ar = TEAM_DICT.get(t2_en, t2_en)
-            # ندمج اسمي الفريقين للبحث
             match_name_ar = f"{t1_ar} {t2_ar}"
             
             print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
@@ -138,12 +150,10 @@ async def main():
             target_url = None
             best_score = 0
             
-            # المطابقة الضبابية الذكية
             for link in all_links:
                 norm_link_text = normalize_arabic(link['text'])
                 norm_match_name = normalize_arabic(match_name_ar)
                 
-                # نقارن النص اللي بالصفحة مع اسم المباراة
                 score = fuzz.token_set_ratio(norm_match_name, norm_link_text)
                 
                 if score > 65 and score > best_score:
@@ -154,7 +164,7 @@ async def main():
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
                 if stream_url:
-                    # تمرير الرابط عبر البروكسي مالتك
+                    # هنا نستخدم البروكسي لكي يعمل الفيديو بموقعك
                     final_link = f"{PROXY_URL}/?u={quote(stream_url)}" if PROXY_URL else stream_url
                     links_to_update[str(m.get("id"))] = {"link": final_link, "mode": "embed"}
                     print(f"  ✅ تم التقاط الفيديو وتمريره عبر البروكسي!")
