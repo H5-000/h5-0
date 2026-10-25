@@ -8,88 +8,44 @@ from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
 
+# ==== الإعدادات الأساسية ====
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-PROXY_URL = os.environ.get("PROXY_URL") 
+PROXY_URL = os.environ.get("PROXY_URL") # هذا خاص بتشغيل الفيديو فقط
 
-# 📚 القاموس الشامل (تمت إضافة الفرق اللي بالصورة والكثير غيرها)
+# 📚 القاموس الشامل للفرق
 TEAM_DICT = {
-    # الدوري الفرنسي
-    "Strasbourg": "ستراسبورغ", "Rennes": "رين", "Troyes": "تروا", "Toulouse": "تولوز", 
-    "PSG": "باريس سان جيرمان", "Marseille": "مارسيليا", "Lyon": "ليون", "Monaco": "موناكو", 
-    "Lille": "ليل", "Nice": "نيس", "Lens": "لانس", "Reims": "ريمس", "Nantes": "نانت", 
-    "Montpellier": "مونبلييه", "Brest": "بريست", "Lorient": "لوريان", "Auxerre": "أوكسير", 
-    "Le Havre": "لوهافر", "Metz": "ميتز", "Saint Etienne": "سانت إتيان", "Clermont": "كليرمون",
-    
-    # الدوري الإنجليزي
-    "Leeds": "ليدز", "Leeds United": "ليدز يونايتد", "Sunderland": "سندرلاند",
-    "Man City": "مانشستر سيتي", "Manchester City": "مانشستر سيتي", "Arsenal": "أرسنال",
-    "Liverpool": "ليفربول", "Chelsea": "تشيلسي", "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد",
-    "Manchester United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
-    "Brighton": "برايتون", "West Ham": "وست هام", "Crystal Palace": "كريستال بالاس",
-    "Brentford": "برينتفورد", "Fulham": "فولهام", "Everton": "إيفرتون", "Wolves": "وولفرهامبتون",
-    "Bournemouth": "بورنموث", "Nottingham Forest": "نوتينغهام فورست", "Leicester": "ليستر سيتي",
-    "Southampton": "ساوثهامبتون", "Sheffield Utd": "شيفيلد يونايتد", "Norwich": "نورويتش", 
-    "Watford": "واتفورد", "Stoke": "ستوك سيتي", "Preston": "بريستون", "Birmingham": "برمنغهام",
-    "Wrexham": "ريكسهام", "Lincoln City": "لينكولن",
-    
-    # الدوري الألماني
-    "Freiburg": "فرايبورغ", "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", 
-    "RB Leipzig": "لايبزيغ", "Bayer Leverkusen": "ليفركوزن", "Eintracht Frankfurt": "آينتراخت فرانكفورت", 
-    "Stuttgart": "شتوتغارت", "Wolfsburg": "فولفسبورغ", "Gladbach": "مونشنغلادباخ", "Hoffenheim": "هوفنهايم",
+    "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
+    "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
+    "Brighton": "برايتون", "West Ham": "وست هام", "Crystal Palace": "كريستال بالاس", "Brentford": "برينتفورد",
+    "Fulham": "فولهام", "Everton": "إيفرتون", "Wolves": "وولفرهامبتون", "Bournemouth": "بورنموث",
+    "Nottingham Forest": "نوتينغهام فورست", "Leicester": "ليستر سيتي", "Southampton": "ساوثهامبتون",
+    "Leeds": "ليدز", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
+    "Atletico Madrid": "أتلتيكو مدريد", "Athletic Club": "أتلتيك بلباو", "Real Sociedad": "ريال سوسيداد",
+    "Real Betis": "ريال بيتيس", "Villarreal": "فياريال", "Valencia": "فالنسيا", "Sevilla": "إشبيلية",
+    "Girona": "جيرونا", "Celta Vigo": "سيلتا فيغو", "Osasuna": "أوساسونا", "Mallorca": "مايوركا",
+    "Rayo Vallecano": "رايو فاييكانو", "Getafe": "خيتافي", "Espanyol": "إسبانيول", "Inter": "إنتر",
+    "AC Milan": "ميلان", "Juventus": "يوفنتوس", "Napoli": "نابولي", "Roma": "روما", "Lazio": "لاتسيو",
+    "Atalanta": "أتالانتا", "Fiorentina": "فيورنتينا", "Bologna": "بولونيا", "Torino": "تورينو",
+    "Udinese": "أودينيزي", "Genoa": "جنوى", "Cagliari": "كالياري", "Lecce": "ليتشي", "Monza": "مونزا",
+    "Venezia": "فينيسيا", "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "RB Leipzig": "لايبزيغ",
+    "Bayer Leverkusen": "ليفركوزن", "Eintracht Frankfurt": "آينتراخت فرانكفورت", "Stuttgart": "شتوتغارت",
+    "Freiburg": "فرايبورغ", "Wolfsburg": "فولفسبورغ", "Gladbach": "مونشنغلادباخ", "Hoffenheim": "هوفنهايم",
     "Mainz": "ماينز", "Augsburg": "أوغسبورغ", "Werder Bremen": "فيردر بريمن", "Union Berlin": "يونيون برلين",
-    "St Pauli": "سانت باولي", "Heidenheim": "هايدنهايم", "FC Koln": "كولن", "Hamburger SV": "هامبورغ", 
-    "Holstein Kiel": "هولشتاين كيل", "Bochum": "بوخوم", "Elversberg": "إلفرسبيرغ",
-    
-    # الدوري الإيطالي
-    "Lecce": "ليتشي", "Juventus": "يوفنتوس", "Inter": "إنتر", "AC Milan": "ميلان", 
-    "Napoli": "نابولي", "Roma": "روما", "Lazio": "لاتسيو", "Atalanta": "أتالانتا",
-    "Fiorentina": "فيورنتينا", "Bologna": "بولونيا", "Torino": "تورينو", "Udinese": "أودينيزي",
-    "Genoa": "جنوى", "Cagliari": "كالياري", "Verona": "هيلاس فيرونا", "Parma": "بارما",
-    "Como": "كومو", "Sassuolo": "ساسولو", "Cremonese": "كريمونيزي", "Pisa": "بيزا", 
-    "Empoli": "إمبولي", "Monza": "مونزا", "Venezia": "فينيسيا",
-    
-    # الدوري الإسباني
-    "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة", "Atletico Madrid": "أتلتيكو مدريد",
-    "Athletic Club": "أتلتيك بلباو", "Real Sociedad": "ريال سوسيداد", "Real Betis": "ريال بيتيس", 
-    "Villarreal": "فياريال", "Valencia": "فالنسيا", "Sevilla": "إشبيلية", "Girona": "جيرونا", 
-    "Celta Vigo": "سيلتا فيغو", "Osasuna": "أوساسونا", "Mallorca": "مايوركا", "Rayo Vallecano": "رايو فاييكانو", 
-    "Getafe": "خيتافي", "Alaves": "ألافيس", "Espanyol": "إسبانيول", "Elche": "إلتشي", "Levante": "ليفانتـي",
-    "Las Palmas": "لاس بالماس", "Valladolid": "بلد الوليد", "Leganes": "ليغانيس", "Cadiz": "قادش", 
-    "Almeria": "ألميريا", "Granada": "غرناطة",
-    
-    # أفريقيا والبرازيل وغيرها
-    "TP Mazembe": "تي بي مازيمبي", "Club Africain": "النادي الإفريقي", "Al Ahly": "الأهلي", 
-    "Zamalek": "الزمالك", "Pyramids": "بيراميدز", "Wydad": "الوداد", "Raja Casablanca": "الرجاء", 
-    "Esperance": "الترجي", "Mamelodi Sundowns": "صن داونز", "Flamengo": "فلامنغو", "Palmeiras": "بالميراس", 
-    "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس", "Fluminense": "فلوميننسي",
-    "Botafogo": "بوتافوغو", "Vasco": "فاسكو دا غاما", "Gremio": "غريميو", "Internacional": "إنترناسيونال", 
-    "Atletico Mineiro": "أتلتيكو مينيرو", "Cruzeiro": "كروزيرو", "Bahia": "باهيا", "Fortaleza": "فورتاليزا",
-    "Bragantino": "براغانتينو", "Chapecoense": "شابيكوينسي", "Mirassol": "ميراسول", "Inter Miami": "إنتر ميامي",
-    "Boca Juniors": "بوكا جونيورز", "River Plate": "ريفر بليت",
-    
-    # آسيا والهلال والنصر
-    "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
-    "Al Shabab": "الشباب", "Al Ettifaq": "الاتفاق", "Al Fateh": "الفتح", "Al Taawoun": "التعاون",
-    "Al Shorta": "الشرطة", "Al Quwa Al Jawiya": "القوة الجوية", "Al Zawraa": "الزوراء", 
-    "Al Talaba": "الطلبة", "Al Najaf": "النجف", "Naft Al Wasat": "نفط الوسط", "Naft Maysan": "نفط ميسان", 
-    "Al Minaa": "الميناء", "Al Karkh": "الكرخ", "Al Kahrabaa": "الكهرباء", "Amanat Baghdad": "أمانة بغداد", 
-    "Al Hudood": "الحدود", "Al Diwaniya": "الديوانية", "Duhok": "دهوك", "Erbil": "أربيل", "Zakho": "زاخو",
-    "Karbala": "كربلاء", "Al Mosul": "الموصل", "Iraq": "العراق",
-    
-    # أوروبا
-    "Ajax": "أياكس", "PSV": "آيندهوفن", "Feyenoord": "فاينورد", "AZ Alkmaar": "ألكمار",
-    "Twente": "تفنتي", "Utrecht": "أوتريخت", "Sparta Rotterdam": "سبارتا روتردام",
-    "Benfica": "بنفيكا", "Porto": "بورتو", "Sporting CP": "سبورتينغ لشبونة", "Braga": "براغا",
-    "Vitoria Guimaraes": "غيماريش", "Casa Pia": "كاسا بيا", "Galatasaray": "غلطة سراي", 
-    "Fenerbahce": "فنربخشة", "Besiktas": "بشكتاش", "Trabzonspor": "طرابزون سبور",
-    "Shakhtar": "شاختار", "Dinamo Kyiv": "دينامو كييف", "Salzburg": "سالزبورغ", "Young Boys": "يونغ بويز",
-    "Basel": "بازل", "Copenhagen": "كوبنهاغن", "Olympiacos": "أولمبياكوس", "Panathinaikos": "باناثينايكوس",
-    "AEK Athens": "إيه إي كيه أثينا", "PAOK": "باوك", "Dinamo Zagreb": "دينامو زغرب", "Red Star": "النجم الأحمر",
-    "Slavia Prague": "سلافيا براغ", "Sparta Prague": "سبارتا براغ", "Plzen": "فيكتوريا بلزن", 
-    "Bodo Glimt": "بودو غليمت", "Qarabag": "قره باغ", "Kairat": "كايرات", "Pafos": "بافوس", 
-    "Ferencvaros": "فيرينكفاروش", "Legia Warsaw": "ليغيا وارسو", "Celtic": "سيلتيك", "Rangers": "رينجرز",
-    "Club Brugge": "كلوب بروج", "Anderlecht": "أندرلخت", "Genk": "جنك"
+    "PSG": "باريس سان جيرمان", "Marseille": "مارسيليا", "Lyon": "ليون", "Monaco": "موناكو", "Lille": "ليل",
+    "Nice": "نيس", "Rennes": "رين", "Lens": "لانس", "Reims": "ريمس", "Strasbourg": "ستراسبورغ",
+    "Nantes": "نانت", "Toulouse": "تولوز", "Montpellier": "مونبلييه", "Brest": "بريست", "Lorient": "لوريان",
+    "Ajax": "أياكس", "PSV": "آيندهوفن", "Feyenoord": "فاينورد", "Benfica": "بنفيكا", "Porto": "بورتو",
+    "Sporting CP": "سبورتينغ لشبونة", "Braga": "براغا", "Galatasaray": "غلطة سراي", "Fenerbahce": "فنربخشة",
+    "Besiktas": "بشكتاش", "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
+    "Al Shorta": "الشرطة", "Al Quwa Al Jawiya": "القوة الجوية", "Al Zawraa": "الزوراء", "Al Talaba": "الطلبة",
+    "Al Najaf": "النجف", "Al Ahly": "الأهلي", "Zamalek": "الزمالك", "Pyramids": "بيراميدز", "Wydad": "الوداد",
+    "Raja Casablanca": "الرجاء", "Esperance": "الترجي", "TP Mazembe": "تي بي مازيمبي", "Flamengo": "فلامنغو",
+    "Palmeiras": "بالميراس", "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس",
+    "Falamicão": "فلامينغو", "CD Nacional": "ناسيونال", "AZ Alkmaar": "ألكمار", "Parma": "بارما",
+    "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", "Preston": "بريستون", "Lincoln City": "لينكولن",
+    "Birmingham": "برمنغهام", "Auxerre": "أوكسير", "Le Havre": "لوهافر", "Sheffield Utd": "شيفيلد يونايتد", 
+    "Wrexham": "ريكسهام", "Elversberg": "إلفرسبيرغ", "Norwich": "نورويتش", "Watford": "واتفورد"
 }
 
 def normalize_arabic(text):
@@ -108,6 +64,7 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
+# دالة استخراج رابط الفيديو المباشر (m3u8)
 async def extract_stream(page, target_url):
     stream_url = None
     def handle_response(response):
@@ -120,12 +77,12 @@ async def extract_stream(page, target_url):
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
-        # إذا لم يجد الفيديو، يضغط على منتصف الشاشة لتشغيل المشغل
+        # إذا ما ظهر الفيديو، نضغط على الشاشة لتشغيل المشغل
         if not stream_url:
             await page.mouse.click(400, 300)
-            await page.wait_for_timeout(4000)
-    except Exception:
-        pass
+            await page.wait_for_timeout(5000)
+    except Exception as e:
+        print(f"  ❌ خطأ في فتح الصفحة: {e}")
     finally:
         page.remove_listener("response", handle_response)
     return stream_url
@@ -148,6 +105,7 @@ async def main():
     if not active_matches: return
 
     async with async_playwright() as p:
+        # ملاحظة: لا نستخدم البروكسي في المتصفح لتجنب خطأ الاتصال، البروكسي فقط للفيديو
         browser = await p.chromium.launch(
             headless=True,
             args=["--disable-webrtc", "--no-sandbox"]
@@ -155,13 +113,9 @@ async def main():
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
 
-        print("🌐 جاري تحميل الصفحة الرئيسية...")
+        print("🌐 جاري سحب كافة الروابط من الصفحة الرئيسية...")
         try:
-            # ننتظر تحميل الشبكة بالكامل (networkidle) لضمان اكتمال الجافاسكربت
-            await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=40000)
-            # ننتظر 5 ثواني إضافية لضمان ظهور كل المباريات
-            await page.wait_for_timeout(5000)
-            
+            await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
             html_content = await page.content()
             soup = BeautifulSoup(html_content, 'html.parser')
             
@@ -178,7 +132,7 @@ async def main():
             
             print(f"✅ تم سحب {len(all_links)} رابط من الصفحة.")
         except Exception as e:
-            print(f"❌ فشل تحميل الصفحة: {e}")
+            print(f"❌ فشل تحميل الموقع: {e}")
             await browser.close()
             return
 
@@ -202,26 +156,30 @@ async def main():
 
             for link in all_links:
                 norm_link_text = normalize_arabic(link['text'])
-                
-                # المطابقة الضبابية
                 score = fuzz.token_set_ratio(norm_match_name, norm_link_text)
                 
-                # إذا كانت النسبة عالية، أو إذا كان اسم الفريقين موجوداً حرفياً داخل النص
-                if (score > 60 and score > best_score) or (normalize_arabic(t1_ar) in norm_link_text and normalize_arabic(t2_ar) in norm_link_text):
-                    best_score = score if score > 60 else 100
+                # نسبة التشابه 65% أو أكثر تعتبر مطابقة
+                if score > 65 and score > best_score:
+                    best_score = score
                     target_url = link['href']
 
             if target_url:
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
                 if stream_url:
-                    final_link = f"{PROXY_URL}/?u={quote(stream_url)}" if PROXY_URL else stream_url
+                    # 🔥 استخدام البروكسي لتشغيل الفيديو بدون إعلانات
+                    if PROXY_URL:
+                        clean_proxy = PROXY_URL.rstrip('/')
+                        final_link = f"{clean_proxy}/?u={quote(stream_url)}"
+                    else:
+                        final_link = stream_url
+                    
                     links_to_update[str(m.get("id"))] = {"link": final_link, "mode": "embed"}
                     print(f"  ✅ تم التقاط الفيديو وتمريره للبروكسي!")
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
             else:
-                print(f"  ⚠️ المباراة غير موجودة بالصفحة الرئيسية حالياً.")
+                print(f"  ⚠️ لا يوجد تطابق كافٍ لهذه المباراة.")
 
         await browser.close()
 
