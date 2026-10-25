@@ -8,19 +8,18 @@ from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
 
-# ==== الإعدادات الأساسية ====
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-PROXY_URL = os.environ.get("PROXY_URL") # هذا خاص بتشغيل الفيديو فقط
+PROXY_URL = os.environ.get("PROXY_URL")
 
-# 📚 القاموس الشامل للفرق
+# 📚 القاموس (تمت إضافة الفرق الناقصة اللي بالصورة)
 TEAM_DICT = {
     "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
     "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
     "Brighton": "برايتون", "West Ham": "وست هام", "Crystal Palace": "كريستال بالاس", "Brentford": "برينتفورد",
     "Fulham": "فولهام", "Everton": "إيفرتون", "Wolves": "وولفرهامبتون", "Bournemouth": "بورنموث",
     "Nottingham Forest": "نوتينغهام فورست", "Leicester": "ليستر سيتي", "Southampton": "ساوثهامبتون",
-    "Leeds": "ليدز", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
+    "Leeds": "ليدز", "Leeds United": "ليدز", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
     "Atletico Madrid": "أتلتيكو مدريد", "Athletic Club": "أتلتيك بلباو", "Real Sociedad": "ريال سوسيداد",
     "Real Betis": "ريال بيتيس", "Villarreal": "فياريال", "Valencia": "فالنسيا", "Sevilla": "إشبيلية",
     "Girona": "جيرونا", "Celta Vigo": "سيلتا فيغو", "Osasuna": "أوساسونا", "Mallorca": "مايوركا",
@@ -28,13 +27,14 @@ TEAM_DICT = {
     "AC Milan": "ميلان", "Juventus": "يوفنتوس", "Napoli": "نابولي", "Roma": "روما", "Lazio": "لاتسيو",
     "Atalanta": "أتالانتا", "Fiorentina": "فيورنتينا", "Bologna": "بولونيا", "Torino": "تورينو",
     "Udinese": "أودينيزي", "Genoa": "جنوى", "Cagliari": "كالياري", "Lecce": "ليتشي", "Monza": "مونزا",
-    "Venezia": "فينيسيا", "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "RB Leipzig": "لايبزيغ",
-    "Bayer Leverkusen": "ليفركوزن", "Eintracht Frankfurt": "آينتراخت فرانكفورت", "Stuttgart": "شتوتغارت",
+    "Venezia": "فينيسيا", "Bayern": "بايرن ميونخ", "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "Dortmund": "دورتموند", "RB Leipzig": "لايبزيغ", "Leipzig": "لايبزيغ",
+    "Bayer Leverkusen": "ليفركوزن", "Leverkusen": "ليفركوزن", "Eintracht Frankfurt": "آينتراخت فرانكفورت", "Stuttgart": "شتوتغارت",
     "Freiburg": "فرايبورغ", "Wolfsburg": "فولفسبورغ", "Gladbach": "مونشنغلادباخ", "Hoffenheim": "هوفنهايم",
     "Mainz": "ماينز", "Augsburg": "أوغسبورغ", "Werder Bremen": "فيردر بريمن", "Union Berlin": "يونيون برلين",
     "PSG": "باريس سان جيرمان", "Marseille": "مارسيليا", "Lyon": "ليون", "Monaco": "موناكو", "Lille": "ليل",
-    "Nice": "نيس", "Rennes": "رين", "Lens": "لانس", "Reims": "ريمس", "Strasbourg": "ستراسبورغ",
+    "Nice": "نيس", "Rennes": "رين", "Stade Rennais": "رين", "Lens": "لانس", "Reims": "ريمس", "Strasbourg": "ستراسبورغ",
     "Nantes": "نانت", "Toulouse": "تولوز", "Montpellier": "مونبلييه", "Brest": "بريست", "Lorient": "لوريان",
+    "Angers": "أنجيه", "Angers SCO": "أنجيه", "Troyes": "تروا", "Le Mans": "لو مان", "Auxerre": "أوكسير", "Le Havre": "لوهافر",
     "Ajax": "أياكس", "PSV": "آيندهوفن", "Feyenoord": "فاينورد", "Benfica": "بنفيكا", "Porto": "بورتو",
     "Sporting CP": "سبورتينغ لشبونة", "Braga": "براغا", "Galatasaray": "غلطة سراي", "Fenerbahce": "فنربخشة",
     "Besiktas": "بشكتاش", "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
@@ -42,11 +42,29 @@ TEAM_DICT = {
     "Al Najaf": "النجف", "Al Ahly": "الأهلي", "Zamalek": "الزمالك", "Pyramids": "بيراميدز", "Wydad": "الوداد",
     "Raja Casablanca": "الرجاء", "Esperance": "الترجي", "TP Mazembe": "تي بي مازيمبي", "Flamengo": "فلامنغو",
     "Palmeiras": "بالميراس", "Corinthians": "كورنثيانز", "Sao Paulo": "ساو باولو", "Santos": "سانتوس",
-    "Falamicão": "فلامينغو", "CD Nacional": "ناسيونال", "AZ Alkmaar": "ألكمار", "Parma": "بارما",
-    "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", "Preston": "بريستون", "Lincoln City": "لينكولن",
-    "Birmingham": "برمنغهام", "Auxerre": "أوكسير", "Le Havre": "لوهافر", "Sheffield Utd": "شيفيلد يونايتد", 
-    "Wrexham": "ريكسهام", "Elversberg": "إلفرسبيرغ", "Norwich": "نورويتش", "Watford": "واتفورد"
+    "Fluminense": "فلوميننسي", "Bahia": "باهيا", "Chapecoense": "شابيكوينسي", "Chapecoense": "شابيكوينسي",
+    "Nacional": "ناسيونال", "CD Nacional": "ناسيونال", "Sparta": "سبارتا", "Sparta Rotterdam": "سبارتا روتردام",
+    "AZ Alkmaar": "ألكمار", "Parma": "بارما", "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", 
+    "Preston": "بريستون", "Lincoln City": "لينكولن", "Birmingham": "برمنغهام", "Elversberg": "إلفرسبيرغ", 
+    "Norwich": "نورويتش", "Watford": "واتفورد"
 }
+
+# دالة ذكية للبحث عن الاسم العربي (حتى لو كان الاسم ناقص أو زيادة)
+def get_arabic_name(en_name):
+    if not en_name: return ""
+    # إذا الاسم موجود حرفياً
+    if en_name in TEAM_DICT:
+        return TEAM_DICT[en_name]
+    
+    # إذا مو موجود، نبحث عن أقرب تطابق بالقاموس
+    best_score = 0
+    best_match = en_name # إذا ما لقينا شي، نرجع الاسم الإنجليزي
+    for en_key, ar_val in TEAM_DICT.items():
+        score = fuzz.token_set_ratio(en_name.lower(), en_key.lower())
+        if score > 80 and score > best_score:
+            best_score = score
+            best_match = ar_val
+    return best_match
 
 def normalize_arabic(text):
     if not text: return ""
@@ -64,7 +82,6 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# دالة استخراج رابط الفيديو المباشر (m3u8)
 async def extract_stream(page, target_url):
     stream_url = None
     def handle_response(response):
@@ -77,12 +94,11 @@ async def extract_stream(page, target_url):
     try:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
-        # إذا ما ظهر الفيديو، نضغط على الشاشة لتشغيل المشغل
         if not stream_url:
             await page.mouse.click(400, 300)
             await page.wait_for_timeout(5000)
     except Exception as e:
-        print(f"  ❌ خطأ في فتح الصفحة: {e}")
+        pass
     finally:
         page.remove_listener("response", handle_response)
     return stream_url
@@ -105,7 +121,6 @@ async def main():
     if not active_matches: return
 
     async with async_playwright() as p:
-        # ملاحظة: لا نستخدم البروكسي في المتصفح لتجنب خطأ الاتصال، البروكسي فقط للفيديو
         browser = await p.chromium.launch(
             headless=True,
             args=["--disable-webrtc", "--no-sandbox"]
@@ -124,7 +139,8 @@ async def main():
                 link_text = a_tag.get_text(strip=True)
                 href = a_tag['href']
                 
-                if not link_text or len(link_text) < 5: continue
+                # خفضنا الشرط إلى حرفين عشان ما نضيع مباريات أسماء فرقها قصيرة
+                if not link_text or len(link_text) < 2: continue
                 if "بث مباشر" in link_text or "مباريات اليوم" in link_text: continue
                 
                 full_url = urljoin("https://koora7goal.com", href)
@@ -143,8 +159,9 @@ async def main():
             t2_en = m.get("away", {}).get("name", "")
             if not t1_en or not t2_en: continue
 
-            t1_ar = TEAM_DICT.get(t1_en, t1_en)
-            t2_ar = TEAM_DICT.get(t2_en, t2_en)
+            # استخدام الدالة الذكية للترجمة
+            t1_ar = get_arabic_name(t1_en)
+            t2_ar = get_arabic_name(t2_en)
             match_name_ar = f"{t1_ar} {t2_ar}"
             
             print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
@@ -158,7 +175,6 @@ async def main():
                 norm_link_text = normalize_arabic(link['text'])
                 score = fuzz.token_set_ratio(norm_match_name, norm_link_text)
                 
-                # نسبة التشابه 65% أو أكثر تعتبر مطابقة
                 if score > 65 and score > best_score:
                     best_score = score
                     target_url = link['href']
@@ -167,7 +183,6 @@ async def main():
                 print(f"  -> تطابق {round(best_score)}%: {target_url}")
                 stream_url = await extract_stream(page, target_url)
                 if stream_url:
-                    # 🔥 استخدام البروكسي لتشغيل الفيديو بدون إعلانات
                     if PROXY_URL:
                         clean_proxy = PROXY_URL.rstrip('/')
                         final_link = f"{clean_proxy}/?u={quote(stream_url)}"
@@ -179,7 +194,7 @@ async def main():
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس ما لقينا الفيديو.")
             else:
-                print(f"  ⚠️ لا يوجد تطابق كافٍ لهذه المباراة.")
+                print(f"  ⚠️ المباراة غير موجودة بالصفحة الرئيسية حالياً.")
 
         await browser.close()
 
