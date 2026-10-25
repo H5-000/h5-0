@@ -3,14 +3,26 @@ import re
 import asyncio
 import requests
 from playwright.async_api import async_playwright
-from deep_translator import GoogleTranslator
+from deep_translator import MyMemoryTranslator
 from rapidfuzz import fuzz
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PROXY_URL = os.environ.get("PROXY_URL")
 
-# دالة تنظيف النصوص
+# قاموس احتياطي لأشهر الفرق (لأن الترجمة الآلية أحياناً تترجمها غلط)
+# مثلاً Athletic تترجم إلى "ألعاب القوى" بدل "أتلتيك"
+TEAM_DICT = {
+    "Getafe": "خيتافي", "Athletic Bilbao": "أتلتيك بيلباو", "Athletic Club": "أتلتيك بيلباو",
+    "PSV": "آيندهوفن", "Feyenoord": "فاينورد", "Bournemouth": "بورنموث",
+    "Manchester United": "مانشستر يونايتد", "Man United": "مانشستر يونايتد", "Liverpool": "ليفربول",
+    "Brighton": "برايتون", "Newcastle": "نيوكاسل", "Crystal Palace": "كريستال بالاس",
+    "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة", "Atletico Madrid": "أتلتيكو مدريد",
+    "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Chelsea": "تشيلسي", "Tottenham": "توتنهام",
+    "Bayern Munich": "بايرن ميونخ", "Borussia Dortmund": "دورتموند", "PSG": "باريس سان جيرمان",
+    "Al Hilal": "الهلال", "Al Nassr": "النصر", "Al Ittihad": "الاتحاد", "Al Ahli": "الأهلي",
+}
+
 def normalize_arabic(text):
     if not text: return ""
     text = re.sub(r"[أإآا]", "ا", text)
@@ -18,6 +30,18 @@ def normalize_arabic(text):
     text = re.sub(r"ى", "ي", text)
     text = re.sub(r"\s+", "", text)
     return text
+
+def translate_name(name):
+    # إذا الفريق موجود بالقاموس الاحتياطي، نستخدمه مباشرة
+    if name in TEAM_DICT:
+        return TEAM_DICT[name]
+    
+    # إذا مو موجود، نستخدم مكتبة MyMemory (أكثر استقراراً من جوجل في GitHub)
+    try:
+        translated = MyMemoryTranslator(source='en-GB', target='ar-SA').translate(name)
+        return translated if translated else name
+    except:
+        return name
 
 async def get_matches():
     try:
@@ -48,7 +72,6 @@ async def main():
     print(f"📊 إجمالي المباريات: {len(fixtures)} | المباريات النشطة: {len(active_matches)}")
 
     if not active_matches:
-        print("⚠️ لا توجد مباريات مباشرة أو قادمة حالياً.")
         return
 
     async with async_playwright() as p:
@@ -65,8 +88,9 @@ async def main():
         print("🌐 جاري فتح الصفحة الرئيسية وسحب الروابط...")
         try:
             await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=30000)
+            # نسحب الروابط اللي شكلها تبدو كمباريات فقط
             all_links = await page.evaluate('''() => {
-                return Array.from(document.querySelectorAll('a')).map(a => ({text: a.innerText, href: a.href}));
+                return Array.from(document.querySelectorAll('a')).map(a => ({text: a.innerText.trim(), href: a.href}));
             }''')
             print(f"✅ تم سحب {len(all_links)} رابط من الصفحة الرئيسية.")
         except Exception as e:
@@ -79,39 +103,40 @@ async def main():
             t2_en = m.get("away", {}).get("name")
             if not t1_en or not t2_en: continue
             
-            # الترجمة التلقائية من الإنجليزي للعربي
-            try:
-                ar_t1 = GoogleTranslator(source='en', target='ar').translate(t1_en)
-                ar_t2 = GoogleTranslator(source='en', target='ar').translate(t2_en)
-            except:
-                ar_t1, ar_t2 = t1_en, t2_en # إذا فشلت الترجمة نستخدم الاسم الإنجليزي
-
+            ar_t1 = translate_name(t1_en)
+            ar_t2 = translate_name(t2_en)
+            
             norm_t1 = normalize_arabic(ar_t1)
             norm_t2 = normalize_arabic(ar_t2)
             
-            print(f"🔍 جاري البحث عن: {ar_t1} ضد {ar_t2} ({t1_en} vs {t2_en})")
+            print(f"🔍 جاري البحث عن: {ar_t1} ضد {ar_t2} (الأصل: {t1_en} vs {t2_en})")
             
             target_url = None
             best_score = 0
             
             for link in all_links:
+                if not link['text'] or len(link['text']) < 5: continue
+                
                 norm_link_text = normalize_arabic(link['text'])
                 
-                # خوارزمية التشابه: نقارن اسم الفريق الأول + الثاني مع نص الرابط
+                # 1. التطابق المباشر: إذا لقينا اسم الفريقين معاً
+                if norm_t1 in norm_link_text and norm_t2 in norm_link_text:
+                    target_url = link['href']
+                    best_score = 100
+                    break
+                
+                # 2. التطابق الذكي: حساب نسبة التشابه
                 score1 = fuzz.token_set_ratio(norm_t1, norm_link_text)
                 score2 = fuzz.token_set_ratio(norm_t2, norm_link_text)
-                
-                # إذا كان النص يحتوي على تشابه عالي للفريقين معاً
                 combined_score = (score1 + score2) / 2
                 
-                # إذا وصلت نسبة التشابه 75% أو أكثر، نعتبرها نفس المباراة!
                 if combined_score > 75 and combined_score > best_score:
                     best_score = combined_score
                     target_url = link['href']
             
             if target_url:
                 try:
-                    print(f"  -> دخول لصفحة المباراة (نسبة التطابق: {best_score}%)...")
+                    print(f"  -> دخول لصفحة المباراة (نسبة التطابق: {round(best_score)}%)...")
                     await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
                     
                     try:
@@ -136,7 +161,7 @@ async def main():
         cfg = cfg_res.json()
         cfg["links"] = {**cfg.get("links", {}), **links_to_update}
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
-        print("🎉 تم التحديث بنجاح! تم استخدام الذكاء الاصطناعي للمطابقة.")
+        print("🎉 تم التحديث بنجاح!")
     else:
         print("⚠️ لم يتم العثور على روابط جديدة.")
 
