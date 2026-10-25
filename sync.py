@@ -6,6 +6,7 @@ import requests
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 from deep_translator import MyMemoryTranslator
+from bs4 import BeautifulSoup
 
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
@@ -39,6 +40,7 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
+# دالة استخراج البث
 async def extract_stream(page, target_url):
     stream_url = None
     async def handle_response(response):
@@ -91,15 +93,25 @@ async def main():
         page = await context.new_page()
         await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
 
-        print("🌐 جاري سحب روابط المباريات من koora7goal...")
+        print("🌐 جاري سحب وتحليل كود صفحة koora7goal...")
         try:
-            await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=30000)
-            all_links = await page.evaluate('''() => {
-                return Array.from(document.querySelectorAll('a')).map(a => ({text: a.innerText.trim(), href: a.href}));
-            }''')
-            print(f"✅ تم سحب {len(all_links)} رابط.")
+            # انتظار أطول لضمان تحميل المباريات عبر جافاسكربت
+            await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
+            
+            # استخدام BeautifulSoup لتحليل كامل كود الصفحة
+            html_content = await page.content()
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # استخراج كل الروابط التي تحتوي على نص عربي
+            all_links = []
+            for a_tag in soup.find_all('a', href=True):
+                link_text = a_tag.get_text(strip=True)
+                if link_text and len(link_text) > 3:
+                    all_links.append({'text': link_text, 'href': a_tag['href']})
+            
+            print(f"✅ تم سحب {len(all_links)} رابط يحتوي على نص عربي.")
         except Exception as e:
-            print(f"❌ فشل فتح الموقع: {e}")
+            print(f"❌ فشل تحليل الصفحة: {e}")
             await browser.close()
             return
 
@@ -131,14 +143,15 @@ async def main():
             target_url = None
             best_score = 0
             
+            # البحث عن أفضل تطابق بين النص المستخرج والاسم العربي
             for link in all_links:
-                if not link['text'] or len(link['text']) < 3: continue
                 norm_link = normalize_arabic(link['text'])
                 score1 = fuzz.token_set_ratio(normalize_arabic(t1_ar), norm_link)
                 score2 = fuzz.token_set_ratio(normalize_arabic(t2_ar), norm_link)
                 combined = (score1 + score2) / 2
 
-                if combined > 70 and combined > best_score:
+                # خفضنا العتبة إلى 55% لأننا نبحث الآن في كامل كود الصفحة
+                if combined > 55 and combined > best_score:
                     best_score = combined
                     target_url = link['href']
 
@@ -151,7 +164,7 @@ async def main():
                 else:
                     print(f"  ⚠️ الصفحة فتحت بس الفيديو ما ظهر.")
             else:
-                print(f"  ⚠️ لا يوجد تطابق كافٍ.")
+                print(f"  ⚠️ لا يوجد تطابق كافٍ (أعلى نسبة: {round(best_score)}%).")
 
         await browser.close()
 
