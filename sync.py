@@ -81,7 +81,6 @@ async def extract_iframe(page, target_url):
         await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_timeout(3000)
         
-        # نبحث عن أول iframe بالصفحة (هذا يكون مشغل البث)
         iframe = await page.query_selector("iframe")
         if iframe:
             src = await iframe.get_attribute("src")
@@ -105,99 +104,124 @@ async def main():
     token = r.json().get("token")
 
     fixtures = await get_matches()
+    
+    # 🔥 التعديل الأول: فصل المباريات النشطة عن المنتهية
     active_matches = [m for m in fixtures if m.get("status") in ["live", "soon"]]
-    print(f"📊 إجمالي المباريات: {len(fixtures)} | النشطة: {len(active_matches)}")
+    finished_matches = [m for m in fixtures if m.get("status") in ["done", "finished", "postponed"]]
+    
+    print(f"📊 إجمالي المباريات: {len(fixtures)} | النشطة: {len(active_matches)} | المنتهية: {len(finished_matches)}")
 
-    if not active_matches: return
+    links_to_update = {}
+    
+    # إذا كان هناك مباريات نشطة، نبحث عن روابطها
+    if active_matches:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-webrtc", "--no-sandbox"]
+            )
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            page = await context.new_page()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-webrtc", "--no-sandbox"]
-        )
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        page = await context.new_page()
-
-        print("🌐 جاري فتح الصفحة الرئيسية لـ koora7goal...")
-        try:
-            await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(5000)
-            
-            all_elements = await page.evaluate('''() => {
-                let results = [];
-                document.querySelectorAll('a, button, div[onclick], div.match-card, .match-item').forEach(el => {
-                    let text = el.innerText || el.textContent;
-                    let href = el.href || null;
-                    if (text && text.trim().length > 3) {
-                        results.push({ text: text.trim(), href: href });
-                    }
-                });
-                return results;
-            }''')
-            print(f"✅ تم سحب {len(all_elements)} عنصر من الصفحة.")
-        except Exception as e:
-            print(f"❌ فشل تحميل الموقع: {e}")
-            await browser.close()
-            return
-
-        links_to_update = {}
-        
-        for m in active_matches:
-            t1_en = m.get("home", {}).get("name", "")
-            t2_en = m.get("away", {}).get("name", "")
-            if not t1_en or not t2_en: continue
-
-            t1_ar = get_arabic_name(t1_en)
-            t2_ar = get_arabic_name(t2_en)
-            match_name_ar = f"{t1_ar} {t2_ar}"
-            
-            print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
-
-            target_url = None
-            best_score = 0
-            
-            norm_t1 = normalize_arabic(t1_ar)
-            norm_t2 = normalize_arabic(t2_ar)
-            norm_match_name = normalize_arabic(match_name_ar)
-
-            for el in all_elements:
-                norm_text = normalize_arabic(el['text'])
+            print("🌐 جاري فتح الصفحة الرئيسية لـ koora7goal...")
+            try:
+                await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(5000)
                 
-                if norm_t1 in norm_text and norm_t2 in norm_text:
-                    if el['href']:
+                all_elements = await page.evaluate('''() => {
+                    let results = [];
+                    document.querySelectorAll('a, button, div[onclick], div.match-card, .match-item').forEach(el => {
+                        let text = el.innerText || el.textContent;
+                        let href = el.href || null;
+                        if (text && text.trim().length > 3) {
+                            results.push({ text: text.trim(), href: href });
+                        }
+                    });
+                    return results;
+                }''')
+                print(f"✅ تم سحب {len(all_elements)} عنصر من الصفحة.")
+            except Exception as e:
+                print(f"❌ فشل تحميل الموقع: {e}")
+                await browser.close()
+                return
+
+            for m in active_matches:
+                t1_en = m.get("home", {}).get("name", "")
+                t2_en = m.get("away", {}).get("name", "")
+                if not t1_en or not t2_en: continue
+
+                t1_ar = get_arabic_name(t1_en)
+                t2_ar = get_arabic_name(t2_en)
+                match_name_ar = f"{t1_ar} {t2_ar}"
+                
+                print(f"🔍 البحث عن: {t1_ar} ضد {t2_ar}")
+
+                target_url = None
+                best_score = 0
+                
+                norm_t1 = normalize_arabic(t1_ar)
+                norm_t2 = normalize_arabic(t2_ar)
+                norm_match_name = normalize_arabic(match_name_ar)
+
+                for el in all_elements:
+                    norm_text = normalize_arabic(el['text'])
+                    
+                    if norm_t1 in norm_text and norm_t2 in norm_text:
+                        if el['href']:
+                            target_url = el['href']
+                            best_score = 100
+                            break
+                    
+                    score = fuzz.token_set_ratio(norm_match_name, norm_text)
+                    if score > 70 and score > best_score and el['href']:
+                        best_score = score
                         target_url = el['href']
-                        best_score = 100
-                        break
-                
-                score = fuzz.token_set_ratio(norm_match_name, norm_text)
-                if score > 70 and score > best_score and el['href']:
-                    best_score = score
-                    target_url = el['href']
 
-            if target_url:
-                print(f"  -> تطابق {round(best_score)}%: {target_url}")
-                iframe_url = await extract_iframe(page, target_url)
-                
-                if iframe_url:
-                    # حفظ رابط الـ iframe مباشرة بدون بروكسي
-                    links_to_update[str(m.get("id"))] = {"link": iframe_url, "mode": "embed"}
-                    print(f"  ✅ تم التقاط رابط المشغل (iframe) وحفظه!")
+                if target_url:
+                    print(f"  -> تطابق {round(best_score)}%: {target_url}")
+                    iframe_url = await extract_iframe(page, target_url)
+                    
+                    if iframe_url:
+                        links_to_update[str(m.get("id"))] = {"link": iframe_url, "mode": "embed"}
+                        print(f"  ✅ تم التقاط رابط المشغل (iframe) وحفظه!")
+                    else:
+                        print(f"  ⚠️ الصفحة فتحت بس ما لقينا مشغل (iframe).")
                 else:
-                    print(f"  ⚠️ الصفحة فتحت بس ما لقينا مشغل (iframe).")
-            else:
-                print(f"  ⚠️ المباراة غير موجودة بالصفحة.")
+                    print(f"  ⚠️ المباراة غير موجودة بالصفحة.")
 
-        await browser.close()
+            await browser.close()
 
-    if links_to_update:
-        print(f"📤 جاري تحديث موقعك بـ {len(links_to_update)} رابط...")
+    # 🔥 التعديل الثاني: تحديث الروابط وحذف القديمة
+    if links_to_update or finished_matches:
+        print(f"📤 جاري تحديث بيانات الموقع...")
         cfg_res = requests.get(f"{API_BASE}/config")
         cfg = cfg_res.json()
-        cfg["links"] = {**cfg.get("links", {}), **links_to_update}
+        
+        # نجيب الروابط الحالية من الموقع
+        current_links = cfg.get("links", {})
+
+        # 1. نضيف الروابط الجديدة
+        if links_to_update:
+            current_links.update(links_to_update)
+            print(f"   ✅ تم إضافة/تحديث {len(links_to_update)} رابط.")
+
+        # 2. نمسح روابط المباريات المنتهية
+        deleted_count = 0
+        for m in finished_matches:
+            m_id = str(m.get("id"))
+            if m_id in current_links:
+                del current_links[m_id]
+                deleted_count += 1
+        
+        if deleted_count > 0:
+            print(f"   🗑️ تم حذف {deleted_count} رابط لمباريات منتهية.")
+
+        # 3. نحفظ التحديثات النهائية
+        cfg["links"] = current_links
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
         print("🎉 تم التحديث بنجاح!")
     else:
-        print("⚠️ لم يتم العثور على روابط جديدة.")
+        print("⚠️ لا توجد روابط جديدة أو مباريات منتهية للحذف.")
 
 if __name__ == "__main__":
     asyncio.run(main())
