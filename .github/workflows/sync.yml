@@ -1,7 +1,7 @@
 name: Sync Streams
 
 permissions:
-  contents: read
+  contents: write # تم إضافة هذه الصلاحية عشان البوت يقدر يحفظ الأسماء الجديدة
 
 on:
   schedule:
@@ -19,10 +19,11 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install requests playwright rapidfuzz deep-translator beautifulsoup4
+          pip install requests playwright rapidfuzz beautifulsoup4
           playwright install chromium
       - name: Run script
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-          PROXY_URL: ${{ secrets.PROXY_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python sync.py
