@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 API_BASE = "https://workermatch-config.hs2224008.workers.dev"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
-# 📚 القاموس الأساسي (اللي أنت عطيتني إياه)
+# 📚 القاموس الأساسي
 TEAM_DICT = {
     "Man City": "مانشستر سيتي", "Arsenal": "أرسنال", "Liverpool": "ليفربول", "Chelsea": "تشيلسي",
     "Tottenham": "توتنهام", "Man United": "مانشستر يونايتد", "Newcastle": "نيوكاسل", "Aston Villa": "أستون فيلا",
@@ -20,7 +20,7 @@ TEAM_DICT = {
     "Fulham": "فولهام", "Everton": "إيفرتون", "Wolves": "وولفرهامبتون", "Bournemouth": "بورنموث",
     "Nottingham Forest": "نوتينغهام فورست", "Leicester": "ليستر سيتي", "Southampton": "ساوثهامبتون",
     "Leeds": "ليدز", "Leeds United": "ليدز يونايتد", "Sunderland": "سندرلاند", "Real Madrid": "ريال مدريد", "Barcelona": "برشلونة",
-    "Atletico Madrid": "أتلتيكو مدريد", "Athletic Club": "أتلتيك بيلباو", "Real Sociedad": "ريال سوسيداد",
+    "Atletico Madrid": "أتلتيكو مدريد", "Athletic Club": "أتلتيك بلباو", "Real Sociedad": "ريال سوسيداد",
     "Real Betis": "ريال بيتيس", "Villarreal": "فياريال", "Valencia": "فالنسيا", "Sevilla": "إشبيلية",
     "Girona": "جيرونا", "Celta Vigo": "سيلتا فيغو", "Osasuna": "أوساسونا", "Mallorca": "مايوركا",
     "Rayo Vallecano": "رايو فاييكانو", "Getafe": "خيتافي", "Espanyol": "إسبانيول", "Inter": "إنتر",
@@ -48,7 +48,7 @@ TEAM_DICT = {
     "Norwich": "نورويتش", "Watford": "واتفورد", "Rio Ave": "ريو أفي", "Famalicao": "فاماليكاو"
 }
 
-# 🧠 ميزة التعلم الذاتي: تحميل الأسماء المكتسبة سابقاً
+# 🧠 ميزة التعلم الذاتي
 LEARNED_FILE = "teams_learned.json"
 if os.path.exists(LEARNED_FILE):
     with open(LEARNED_FILE, 'r', encoding='utf-8') as f:
@@ -58,7 +58,6 @@ if os.path.exists(LEARNED_FILE):
 def save_learned_teams():
     with open(LEARNED_FILE, 'w', encoding='utf-8') as f:
         json.dump(TEAM_DICT, f, ensure_ascii=False, indent=2)
-    # رفع الملف إلى GitHub عشان الذاكرة تبقى محفوظة
     try:
         subprocess.run(["git", "config", "user.name", "GitHub Action"])
         subprocess.run(["git", "config", "user.email", "action@github.com"])
@@ -83,12 +82,12 @@ def get_arabic_name(en_name):
     if en_name in TEAM_DICT: return TEAM_DICT[en_name]
     best_score = 0
     best_match = en_name
-    for en_key, ar_val in TEAM_DICT.items():
+    # 🔥 الإصلاح هنا: استخدام list() لمنع خطأ التعديل أثناء التكرار
+    for en_key, ar_val in list(TEAM_DICT.items()):
         score = fuzz.token_set_ratio(en_name.lower(), en_key.lower())
         if score > 80 and score > best_score:
             best_score = score
             best_match = ar_val
-            # 🧠 إذا لقى تطابق عالي، نحفظ الاسم الجديد في الذاكرة
             if score > 90 and en_name not in TEAM_DICT:
                 TEAM_DICT[en_name] = ar_val
     return best_match
@@ -109,17 +108,7 @@ async def get_matches():
     except Exception as e: print(f"Error: {e}")
     return []
 
-# 🛡️ ميزة إعادة المحاولة (Retry) وفحص الرابط (Dead Link Checker)
 async def extract_iframe(page, target_url):
-    # التحقق من أن الرابط ليس ميتاً
-    try:
-        head_req = requests.head(target_url, timeout=5, allow_redirects=True)
-        if head_req.status_code not in [200, 206, 301, 302, 403]:
-            return None
-    except:
-        pass # بعض المواقع ترفض طلبات HEAD، فنتجاهل ونكمل
-
-    # محاولة فتح الصفحة 3 مرات
     for attempt in range(3):
         try:
             await page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
@@ -130,7 +119,6 @@ async def extract_iframe(page, target_url):
                 src = await iframe.get_attribute("src")
                 if src:
                     if src.startswith("//"): src = "https:" + src
-                    # فحص إذا كان الرابط يبدأ بـ http (ليس رابط فارغ)
                     if src.startswith("http"):
                         return src
             return None
@@ -141,9 +129,8 @@ async def extract_iframe(page, target_url):
             await page.wait_for_timeout(2000)
     return None
 
-# ⚡ ميزة السرعة: دالة لمعالجة المباراة بشكل متوازي
 async def process_match(browser_context, m, all_elements, semaphore):
-    async with semaphore: # نسمح فقط بـ 5 عمليات متزامنة
+    async with semaphore:
         t1_en = m.get("home", {}).get("name", "")
         t2_en = m.get("away", {}).get("name", "")
         if not t1_en or not t2_en: return None
@@ -236,7 +223,6 @@ async def main():
                 await browser.close()
                 return
 
-            # ⚡ تشغيل المعالجة المتوازية (5 مباريات بنفس الوقت)
             semaphore = asyncio.Semaphore(5)
             tasks = [process_match(context, m, all_elements, semaphore) for m in active_matches]
             results = await asyncio.gather(*tasks)
@@ -247,7 +233,6 @@ async def main():
 
             await browser.close()
 
-    # تحديث الموقع وحذف الروابط القديمة
     if links_to_update or finished_matches:
         print(f"📤 جاري تحديث بيانات الموقع...")
         cfg_res = requests.get(f"{API_BASE}/config")
@@ -273,10 +258,8 @@ async def main():
         requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"})
         print("🎉 تم التحديث بنجاح!")
 
-        # حفظ الأسماء الجديدة ورفعها لـ GitHub
         save_learned_teams()
 
-        # إرسال تقرير تلغرام
         msg = f"✅ *تحديث ملعب لايف*\n\n"
         msg += f"➕ مباريات تم جلب بثها: {added_count}\n"
         msg += f"🗑️ مباريات منتهية تم مسح بثها: {deleted_count}\n"
