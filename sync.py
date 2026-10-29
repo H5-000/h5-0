@@ -82,7 +82,6 @@ def get_arabic_name(en_name):
     if en_name in TEAM_DICT: return TEAM_DICT[en_name]
     best_score = 0
     best_match = en_name
-    # 🔥 الإصلاح هنا: استخدام list() لمنع خطأ التعديل أثناء التكرار
     for en_key, ar_val in list(TEAM_DICT.items()):
         score = fuzz.token_set_ratio(en_name.lower(), en_key.lower())
         if score > 80 and score > best_score:
@@ -202,8 +201,9 @@ async def main():
 
             print("🌐 جاري فتح الصفحة الرئيسية...")
             try:
-                await page.goto("https://koora7goal.com/", wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(4000)
+                # 🔥 الإصلاح: ننتظر تحميل الهيكل الأساسي فقط (domcontentloaded) بدل (networkidle)
+                await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(5000) # نعطيه 5 ثواني للجافاسكربت يرسم المباريات
                 
                 all_elements = await page.evaluate('''() => {
                     let results = [];
