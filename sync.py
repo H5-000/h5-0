@@ -7,7 +7,6 @@ import subprocess
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
-from bs4 import BeautifulSoup
 
 # محاولة استيراد stealth (اختياري)
 try:
@@ -52,7 +51,9 @@ TEAM_DICT = {
     "Fluminense": "فلوميننسي", "Bahia": "باهيا", "Chapecoense": "شابيكوينسي", "Nacional": "ناسيونال", "CD Nacional": "ناسيونال", "Sparta": "سبارتا", "Sparta Rotterdam": "سبارتا روتردام",
     "AZ Alkmaar": "ألكمار", "Parma": "بارما", "Casa Pia": "كاسا بيا", "Stoke": "ستوك سيتي", 
     "Preston": "بريستون", "Lincoln City": "لينكولن", "Birmingham": "برمنغهام", "Elversberg": "إلفرسبيرغ", 
-    "Norwich": "نورويتش", "Watford": "واتفورد", "Rio Ave": "ريو أفي", "Famalicao": "فاماليكاو"
+    "Norwich": "نورويتش", "Watford": "واتفورد", "Rio Ave": "ريو أفي", "Famalicao": "فاماليكاو",
+    "Al Ettifaq": "الاتفاق", "Al Taawoun": "التعاون", "Al Shabab": "الشباب", "Al Fateh": "الفتح", 
+    "Damac": "ضمك", "Al Fayha": "الفيحاء", "Al Riyadh": "الرياض", "Al Khaleej": "الخليج", "Al Okhdood": "الأخدود", "Al Hazem": "الحزم", "Abha": "أبها"
 }
 
 # 🧠 ميزة التعلم الذاتي
@@ -74,25 +75,18 @@ def save_learned_teams():
     except Exception:
         pass
 
-# 📱 ميزة إشعارات تلغرام
 def send_telegram(msg):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if token and chat_id:
         try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
-                timeout=5
-            )
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=5)
         except Exception:
             pass
 
 def get_arabic_name(en_name):
-    if not en_name:
-        return ""
-    if en_name in TEAM_DICT:
-        return TEAM_DICT[en_name]
+    if not en_name: return ""
+    if en_name in TEAM_DICT: return TEAM_DICT[en_name]
     best_score = 0
     best_match = en_name
     for en_key, ar_val in list(TEAM_DICT.items()):
@@ -105,8 +99,7 @@ def get_arabic_name(en_name):
     return best_match
 
 def normalize_arabic(text):
-    if not text:
-        return ""
+    if not text: return ""
     text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
     text = re.sub(r'[أإآ]', 'ا', text)
     text = re.sub(r'ة', 'ه', text)
@@ -117,33 +110,26 @@ def normalize_arabic(text):
 async def get_matches():
     try:
         r = requests.get(f"{API_BASE}/fixtures", timeout=15)
-        if r.ok:
-            return r.json()
+        if r.ok: return r.json()
     except Exception as e:
         print(f"Error fetching fixtures: {e}")
     return []
 
-# ===================== استخراج iframe محسّن =====================
-AD_KEYWORDS = ["doubleclick", "googlesyndication", "adsystem", "googleads",
-               "adservice", "analytics", "facebook.com/tr", "about:blank"]
+AD_KEYWORDS = ["doubleclick", "googlesyndication", "adsystem", "googleads", "adservice", "analytics", "facebook.com/tr", "about:blank"]
 PLAYER_KEYWORDS = ["embed", "player", "stream", "live", "iframe", "video", "play"]
 
 async def extract_iframe(page, target_url):
     for attempt in range(3):
         try:
             await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-
-            # ننتظر ظهور أي iframe أو مهلة 12 ثانية
             try:
                 await page.wait_for_selector("iframe", timeout=12000)
             except Exception:
                 pass
-
             await page.wait_for_timeout(1500)
 
             iframes = await page.query_selector_all("iframe")
             if not iframes:
-                print(f"  ⚠️ لا يوجد iframe بالصفحة (محاولة {attempt+1})")
                 if attempt < 2:
                     await page.wait_for_timeout(2000)
                     continue
@@ -152,46 +138,27 @@ async def extract_iframe(page, target_url):
             fallback = None
             for iframe in iframes:
                 src = await iframe.get_attribute("src")
-                if not src:
-                    continue
-                if src.startswith("//"):
-                    src = "https:" + src
-                if not src.startswith("http"):
-                    continue
+                if not src: continue
+                if src.startswith("//"): src = "https:" + src
+                if not src.startswith("http"): continue
 
                 low = src.lower()
-                # تجاهل الإعلانات
-                if any(x in low for x in AD_KEYWORDS):
-                    continue
-
-                # أولوية للمشغلات المعروفة
+                if any(x in low for x in AD_KEYWORDS): continue
                 if any(k in low for k in PLAYER_KEYWORDS):
-                    print(f"  ✅ تم التقاط مشغل معروف: {src[:70]}...")
                     return src
+                if fallback is None: fallback = src
 
-                if fallback is None:
-                    fallback = src
-
-            if fallback:
-                print(f"  ✅ تم استخدام إطار احتياطي: {fallback[:70]}...")
-                return fallback
-
-            return None
-
-        except Exception as e:
-            if attempt == 2:
-                print(f"  ❌ فشل استخراج iframe بعد 3 محاولات: {e}")
-                return None
+            return fallback
+        except Exception:
+            if attempt == 2: return None
             await page.wait_for_timeout(2000)
     return None
 
-# ===================== معالجة مباراة =====================
 async def process_match(browser_context, m, all_elements, semaphore):
     async with semaphore:
         t1_en = m.get("home", {}).get("name", "")
         t2_en = m.get("away", {}).get("name", "")
-        if not t1_en or not t2_en:
-            return None
+        if not t1_en or not t2_en: return None
 
         t1_ar = get_arabic_name(t1_en)
         t2_ar = get_arabic_name(t2_en)
@@ -212,8 +179,10 @@ async def process_match(browser_context, m, all_elements, semaphore):
                     target_url = el['href']
                     best_score = 100
                     break
+            
+            # تم تنزيل نسبة التشابه إلى 60% لالتقاط أسماء الفرق اللي تتشابه
             score = fuzz.token_set_ratio(norm_match_name, norm_text)
-            if score > 70 and score > best_score and el['href']:
+            if score > 60 and score > best_score and el['href']:
                 best_score = score
                 target_url = el['href']
 
@@ -222,10 +191,8 @@ async def process_match(browser_context, m, all_elements, semaphore):
             page = await browser_context.new_page()
             try:
                 if HAS_STEALTH:
-                    try:
-                        await stealth_async(page)
-                    except Exception:
-                        pass
+                    try: await stealth_async(page)
+                    except Exception: pass
                 iframe_url = await extract_iframe(page, target_url)
                 if iframe_url:
                     return (str(m.get("id")), iframe_url)
@@ -235,7 +202,6 @@ async def process_match(browser_context, m, all_elements, semaphore):
             print(f"  ⚠️ المباراة غير موجودة بالصفحة.")
         return None
 
-# ===================== الدالة الرئيسية =====================
 async def main():
     if not ADMIN_PASSWORD:
         print("❌ خطأ: لم يتم وضع كلمة المرور")
@@ -244,81 +210,63 @@ async def main():
     r = requests.get(f"{API_BASE}/auth", headers={"X-Admin-Password": ADMIN_PASSWORD}, timeout=15)
     if not r.ok:
         print("❌ كلمة المرور غير صحيحة")
-        send_telegram("❌ فشل البوت: كلمة المرور غير صحيحة")
         return
     token = r.json().get("token")
 
     fixtures = await get_matches()
-
-    active_matches = [m for m in fixtures if m.get("status") in ["live", "soon"]]
+    
+    # 🔥 التعديل الأهم: جلب كل المباريات اللي مو منتهية (سواء live, soon, أو أي حالة ثانية)
+    active_matches = [m for m in fixtures if m.get("status") not in ["done", "finished", "postponed"]]
     finished_matches = [m for m in fixtures if m.get("status") in ["done", "finished", "postponed"]]
-
-    print(f"📊 إجمالي المباريات: {len(fixtures)} | النشطة: {len(active_matches)} | المنتهية: {len(finished_matches)}")
+    
+    print(f"📊 إجمالي المباريات بالـ API: {len(fixtures)} | سيتم البحث عن: {len(active_matches)} مباراة")
 
     links_to_update = {}
-
+    
     if active_matches:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-webrtc",
-                    "--no-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                ]
+                headless=True, 
+                args=["--disable-webrtc", "--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
             )
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 viewport={"width": 1366, "height": 800},
-                locale="ar-EG",
+                locale="ar-EG"
             )
             page = await context.new_page()
 
             if HAS_STEALTH:
+                try: await stealth_async(page)
+                except Exception: pass
+
+            print("🌐 جاري فتح صفحة المصدر (koora7goal)...")
+            try:
+                # فتح الصفحة الرئيسية
+                await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=60000)
+                
+                # انتظار ظهور أي عنصر يدل على مباراة
                 try:
-                    await stealth_async(page)
+                    await page.wait_for_selector('a[href*="/match"], div.match-card, .match-item, [class*="match"], [class*="fixture"]', timeout=20000)
                 except Exception:
                     pass
-
-            print("🌐 جاري فتح الصفحة الرئيسية...")
-            try:
-                await page.goto("https://koora7goal.com/", wait_until="domcontentloaded", timeout=60000)
-
-                # انتظر ظهور عناصر تدل على المباريات (عدّل المحدد لو لزم)
-                try:
-                    await page.wait_for_selector(
-                        'a[href*="/match"], div.match-card, .match-item, [class*="match"], [class*="fixture"]',
-                        timeout=20000
-                    )
-                    print("✅ ظهرت عناصر المباريات.")
-                except Exception:
-                    print("⚠️ لم تظهر عناصر المباريات خلال 20 ثانية، نحاول رغم ذلك...")
-
-                # هامش إضافي للجافاسكربت
+                
                 await page.wait_for_timeout(3000)
 
+                # استخراج البيانات بذكاء
                 all_elements = await page.evaluate('''() => {
                     const results = [];
-                    const nodes = document.querySelectorAll(
-                        'a, button, div[onclick], div[data-href], div[data-url], ' +
-                        'div.match-card, .match-item, [class*="match"], [class*="fixture"]'
-                    );
+                    const nodes = document.querySelectorAll('a, button, div[onclick], div[data-href], div[data-url], div.match-card, .match-item, [class*="match"], [class*="fixture"]');
                     nodes.forEach(el => {
                         const text = (el.innerText || el.textContent || '').trim();
-                        let href = el.href
-                                || el.getAttribute('data-href')
-                                || el.getAttribute('data-url')
-                                || null;
-
-                        // استخراج من onclick
+                        let href = el.href || el.getAttribute('data-href') || el.getAttribute('data-url') || null;
+                        
                         if (!href) {
                             const onclick = el.getAttribute('onclick') || '';
                             const mm = onclick.match(/['"](https?:\\/\\/[^'"]+)['"]/);
                             if (mm) href = mm[1];
                         }
-
-                        // استخراج من data-* أخرى
+                        
                         if (!href) {
                             for (const attr of el.attributes || []) {
                                 if (attr.name.startsWith('data-') && /^https?:\\/\\//.test(attr.value)) {
@@ -327,18 +275,16 @@ async def main():
                                 }
                             }
                         }
-
-                        if (text.length > 3) {
-                            results.push({ text, href });
-                        }
+                        if (text.length > 3) results.push({ text, href });
                     });
                     return results;
                 }''')
 
-                print(f"✅ تم سحب {len(all_elements)} عنصر.")
-                # عينات للتشخيص
-                for el in all_elements[:5]:
-                    print(f"  عينة: {el['text'][:60]} | href: {str(el['href'])[:70]}")
+                print(f"✅ تم سحب {len(all_elements)} عنصر من الموقع.")
+                
+                # طباعة 5 عينات للتأكد من أن السحب يعمل
+                for i, el in enumerate(all_elements[:5]):
+                    print(f"   [عينة {i+1}] {el['text'][:30]} | {str(el['href'])[:50]}")
 
             except Exception as e:
                 print(f"❌ فشل تحميل الموقع: {e}")
@@ -346,7 +292,8 @@ async def main():
                 await browser.close()
                 return
 
-            semaphore = asyncio.Semaphore(5)
+            # بدء المعالجة المتوازية
+            semaphore = asyncio.Semaphore(6) # زيادة عدد العمليات المتزامنة لتسريع البوت
             tasks = [process_match(context, m, all_elements, semaphore) for m in active_matches]
             results = await asyncio.gather(*tasks)
 
@@ -356,6 +303,7 @@ async def main():
 
             await browser.close()
 
+    # تحديث البيانات في موقعك
     if links_to_update or finished_matches:
         print(f"📤 جاري تحديث بيانات الموقع...")
         cfg_res = requests.get(f"{API_BASE}/config", timeout=15)
@@ -365,7 +313,7 @@ async def main():
         added_count = len(links_to_update)
         if added_count > 0:
             current_links.update(links_to_update)
-            print(f"   ✅ تم إضافة {added_count} رابط.")
+            print(f"   ✅ تم إضافة/تحديث {added_count} رابط بنجاح.")
 
         deleted_count = 0
         for m in finished_matches:
@@ -373,25 +321,20 @@ async def main():
             if m_id in current_links:
                 del current_links[m_id]
                 deleted_count += 1
-
+        
         if deleted_count > 0:
             print(f"   🗑️ تم حذف {deleted_count} رابط لمباريات منتهية.")
 
         cfg["links"] = current_links
-        requests.post(
-            f"{API_BASE}/config",
-            json=cfg,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15
-        )
+        requests.post(f"{API_BASE}/config", json=cfg, headers={"Authorization": f"Bearer {token}"}, timeout=15)
         print("🎉 تم التحديث بنجاح!")
 
         save_learned_teams()
 
         msg = f"✅ *تحديث ملعب لايف*\n\n"
-        msg += f"➕ مباريات تم جلب بثها: {added_count}\n"
-        msg += f"🗑️ مباريات منتهية تم مسح بثها: {deleted_count}\n"
-        msg += f"📊 إجمالي الروابط النشطة: {len(current_links)}"
+        msg += f"➕ روابط تم جلبها: {added_count}\n"
+        msg += f"🗑️ مباريات منتهية تم مسحها: {deleted_count}\n"
+        msg += f"📊 إجمالي الروابط بموقعك: {len(current_links)}"
         send_telegram(msg)
     else:
         print("⚠️ لا توجد تحديثات جديدة.")
