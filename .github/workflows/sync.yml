@@ -1,7 +1,7 @@
 name: Sync Streams
 
 permissions:
-  contents: write # تم إضافة هذه الصلاحية عشان البوت يقدر يحفظ الأسماء الجديدة
+  contents: write
 
 on:
   schedule:
@@ -13,14 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          
+      # ⬇️ هذا هو الجزء الذي عدلناه ⬇️
       - name: Install dependencies
         run: |
-          pip install requests playwright rapidfuzz beautifulsoup4
+          pip install requests playwright rapidfuzz beautifulsoup4 playwright-stealth
           playwright install chromium
+      # ⬆️ ------------------------ ⬆️
+
       - name: Run script
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
